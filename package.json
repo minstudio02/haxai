@@ -1,0 +1,21 @@
+{
+  "name": "haxball_ai",
+  "version": "1.0.0",
+  "description": "An haxball server-client framework for AI bot making.",
+  "main": "launcher.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@tensorflow/tfjs": "^3.18.0",
+    "@tensorflow/tfjs-node": "4.8.0",
+    "argparse": "^2.0.1",
+    "child_process": "^1.0.2",
+    "decache": "^4.6.1",
+    "open": "^8.4.0",
+    "pm2": "5.3.0",
+    "puppeteer": "^15.1.0"
+  }
+}
