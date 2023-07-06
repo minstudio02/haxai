@@ -43,8 +43,8 @@ class HaxAI {
     // The state variables of the mountain car system.
     this.bot_Position = env.bot.position;
     this.bot_Speed = env.bot.velocity;
-    this.op_Position = env.opponents[0]??{velocity:{x:0,y:0}}.position;
-    this.op_Speed = env.opponents[0]??{velocity:{x:0,y:0}}.velocity;
+    this.op_Position = env.opponents[0]?.position??{x:0,y:0};
+    this.op_Speed = env.opponents[0]?.velocity??{x:0,y:0};
     this.ball_Position = env.ball.position;
     this.ball_Speed = env.ball.velocity;
     this.dist_bw_myball = Math.sqrt(Math.pow(this.bot_Position.x-this.ball_Position.x, 2) + Math.pow(this.bot_Position.y-this.ball_Position.y, 2));

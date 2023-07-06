@@ -31,12 +31,12 @@ async function getPolicy(){
     policyNet = await SaveablePolicyNetwork.loadModel();
   }else{
     const hiddenLayerSizes =
-    '4'.trim().split(',').map(v => {
+    '128,128,128,128'.trim().split(',').map(v => {
       const num = Number.parseInt(v.trim());
       if (!(num > 0)) {
         throw new Error(
             `Invalid hidden layer sizes string: ` +
-            `${4}`);
+            `${128}`);
       }
       return num;
     });

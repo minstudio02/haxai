@@ -55,8 +55,11 @@ async function onGameTick(data, bot, page) {
   if(goalJustScored) {
     delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
   }
+  bot.policy.haxai.setGameState(environment)
+  if(conf.IS_TRAINING&&environment.tick%3==2&&environment.tick>=5){
+    bot.policy.orchestrator.nextRun()
+  }
   if(environment.bot.team!=0&&environment.tick%3==0){
-    bot.policy.haxai.setGameState(environment)
     var actionName
     try {
       actionName = conf.IS_TRAINING==true ? bot.policy.train() : 
@@ -69,10 +72,7 @@ async function onGameTick(data, bot, page) {
       actionName = "none";
     }
   
-    await applyAction(environment.bot.team, actionName, page);
-    if(conf.IS_TRAINING){
-      bot.policy.orchestrator.nextRun()
-    }
+    applyAction(environment.bot.team, actionName, page);
   }
 }
 

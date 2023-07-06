@@ -1,4 +1,4 @@
-const { IS_TRAINING } = require('./config.js');
+const { modifyStatus } = require('./config.js');
 const { createBot, sendMessageToBot, sendMessageToAllBots } = require('./server_functions.js');
 
 async function onGameTick(data, server) {
@@ -36,7 +36,7 @@ async function onGameStop(data, server) {
   sendMessageToAllBots(server.bots, "onGameStop", {});
 };
 async function onPlayerChat(data, server) {
-  IS_TRAINING=data
+  modifyStatus(data)
 };
 
 async function onBotAuthentification(data, server) {

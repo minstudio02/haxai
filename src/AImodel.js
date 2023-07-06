@@ -55,7 +55,7 @@ class Model {
      * @param {tf.Tensor[]} yBatch
      */
     async train(xBatch, yBatch) {
-        await this.network.fit(xBatch, yBatch);
+        await this.network.fit(xBatch, yBatch,{epochs:100});
     }
 
     /**
