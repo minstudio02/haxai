@@ -1458,9 +1458,15 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
       const args = message.split(/\s+/);
       const command = args[0].toLowerCase();
 
-      if(command == '!훈련')  window.messageToServer("onPlayerChat", true);
-      if(command == '!테스트')  window.messageToServer("onPlayerChat", false);
-      if(command == '!help') {
+      if(command == '!train') {
+        window.messageToServer("onPlayerChat", true);
+        console.log('훈련중...')
+      } 
+      else if(command == '!test'){
+        window.messageToServer("onPlayerChat", false);
+        console.log('테스트중...')
+      } 
+      else if(command == '!help') {
         sendHelpMessage(room, player);
       }
 

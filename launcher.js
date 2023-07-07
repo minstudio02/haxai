@@ -5,7 +5,7 @@ const { checkPasswordValue, checkAIActionFile } = require('./src/server_function
 
 const parser = new ArgumentParser();
 
-parser.add_argument('-token', { help: 'Recaptcha token', default: "thr1.AAAAAGSmxQvtTQS2-bYK1g.5RTavFXFfRI" });
+parser.add_argument('-token', { help: 'Recaptcha token', default: "thr1.AAAAAGSnxbSn93Hl0dxIeA.5IqX8IcKAJg" });
 parser.add_argument('-n', '--name', { help: 'Room name', default: '🤖 헥스볼 AI 딥러닝 학습중...🤖' });
 parser.add_argument('-p', '--password', { help: 'Room password (maxlength=30)', default: conf.DEFAULT_PASSWORD, type: checkPasswordValue });
 parser.add_argument('-b', '--bots', { help: 'Number of bots', type: 'int', default: 1});

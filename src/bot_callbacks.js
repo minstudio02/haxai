@@ -56,10 +56,10 @@ async function onGameTick(data, bot, page) {
     delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
   }
   bot.policy.haxai.setGameState(environment)
-  if(conf.IS_TRAINING&&environment.tick%3==2&&environment.tick>=5){
+  if(conf.IS_TRAINING&&environment.tick%6==3&&environment.tick>=9){
     bot.policy.orchestrator.nextRun()
   }
-  if(environment.bot.team!=0&&environment.tick%3==0){
+  if(environment.bot.team!=0&&environment.tick%6==0){
     var actionName
     try {
       actionName = conf.IS_TRAINING==true ? bot.policy.train() : 
