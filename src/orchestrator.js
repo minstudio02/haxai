@@ -96,15 +96,18 @@ class Orchestrator {
         reward += goal_reward
         return reward/1000
     }
-
-    run() {
-        this.state = this.haxai.getStateTensor();
+    sleep (time) {
+      return new Promise((resolve) => setTimeout(resolve, time));
+    }
+    async run(page) {
+        if(this.steps==0) this.state = this.haxai.getStateTensor();
 
         // Interaction with the environment
         this.action = this.model.chooseAction(this.state, this.eps);
-        const actionName = this.haxai.update(this.action);
-
-        return actionName
+        await this.haxai.update(this.action,page);
+        this.sleep(2000/60).then(()=>{
+          this.nextRun()
+        })
     }
     nextRun(){
         let nextState = this.haxai.getStateTensor();

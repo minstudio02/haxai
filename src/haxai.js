@@ -1,5 +1,5 @@
 const tf = require('@tensorflow/tfjs-node');
-
+const { applyAction } = require('./bot_functions.js')
 /**
  * Mountain car system simulator.
  *
@@ -95,18 +95,17 @@ class HaxAI {
    *   A value of 0 leads to no force applied.
    * @returns {bool} Whether the simulation is done.
    */
-  update(action) {
-    if (action==0 ) return 'kick'
-    else if (action==1 ) return 'forward'
-    else if (action==2 ) return 'forward-left'
-    else if (action==3 ) return 'left'
-    else if (action==4 ) return 'backward-left'
-    else if (action==5 ) return 'backward'
-    else if (action==6 ) return 'backward-right'
-    else if (action==7 ) return 'right'
-    else if (action==8 ) return 'forward-right'
-    else return 'none'
-
+  async update(action,page) {
+    if (action==0 ) await applyAction(this.bot_Team, 'kick', page);
+    else if (action==1 ) await applyAction(this.bot_Team, 'forward', page);
+    else if (action==2 ) await applyAction(this.bot_Team, 'forward-left', page); 
+    else if (action==3 ) await applyAction(this.bot_Team, 'left', page); 
+    else if (action==4 ) await applyAction(this.bot_Team, 'backward-left', page); 
+    else if (action==5 ) await applyAction(this.bot_Team, 'backward', page); 
+    else if (action==6 ) await applyAction(this.bot_Team, 'backward-right', page); 
+    else if (action==7 ) await applyAction(this.bot_Team, 'right', page); 
+    else if (action==8 ) await applyAction(this.bot_Team, 'forward-right', page); 
+    else await applyAction(this.bot_Team, 'none', page); 
 
   }
 
@@ -119,11 +118,7 @@ class HaxAI {
    * @returns {bool} Whether the simulation is done.
    */
   isDone() {
-    return (
-      this.position >= this.goalPosition
-    ) && (
-      this.velocity >= this.goalVelocity
-    );
+    return this.score==undefined ? false:this.score.ownTeam > this.score.opponentTeam
   }
 }
 module.exports = { HaxAI };

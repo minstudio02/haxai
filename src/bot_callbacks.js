@@ -56,23 +56,12 @@ async function onGameTick(data, bot, page) {
     delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
   }
   bot.policy.haxai.setGameState(environment)
-  if(conf.IS_TRAINING&&environment.tick%6==3&&environment.tick>=9){
-    bot.policy.orchestrator.nextRun()
-  }
-  if(environment.bot.team!=0&&environment.tick%6==0){
-    var actionName
-    try {
-      actionName = conf.IS_TRAINING==true ? bot.policy.train() : 
-      tf.tidy(() => {
-        const action = bot.policy.model.chooseAction(bot.policy.haxai.getStateTensor(), 0);
-        return bot.policy.haxai.update(action);
-      });
-    } catch (error) {
-      console.error(error);
-      actionName = "none";
-    }
-  
-    applyAction(environment.bot.team, actionName, page);
+  if(environment.bot.team!=0&&environment.tick%3==0){
+    if(conf.IS_TRAINING) await bot.policy.train(page)
+    else tf.tidy(async() => {
+      const action = bot.policy.model.chooseAction(bot.policy.haxai.getStateTensor(), 0);
+      return await bot.policy.haxai.update(action,page);
+    });
   }
 }
 

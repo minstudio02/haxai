@@ -90,11 +90,11 @@ class PolicyNetwork {
    * @returns {number[]} The number of steps completed in the `numGames` games
    *   in this round of training.
    */
-  train() {
+  async train(page) {
 
       // Randomly initialize the state of the cart-pole system at the beginning
       // of every game.
-      return this.orchestrator.run();
+      return await this.orchestrator.run(page);
   }
 }
 
