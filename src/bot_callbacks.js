@@ -60,7 +60,7 @@ async function onGameTick(data, bot, page) {
     if(conf.IS_TRAINING) await bot.policy.train(page)
     else tf.tidy(async() => {
       const action = bot.policy.model.chooseAction(bot.policy.haxai.getStateTensor(), 0);
-      return await bot.policy.haxai.update(action,page);
+      await bot.policy.haxai.update(action,page);
     });
   }
 }

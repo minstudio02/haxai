@@ -38,6 +38,13 @@ class Orchestrator {
         this.not_started_yet = 0
         this.own_score=0
         this.opponent_score=0
+        this.gameRewards = [];
+        this.gameGradients = [];
+
+        this.allGradients = [];
+        this.allRewards = [];
+        this.gameSteps = [];
+        this.optimizer=tf.train.adam(0.05)
     }
 
     /**
@@ -130,7 +137,57 @@ class Orchestrator {
         this.eps = MAX_EPSILON
         await this.replay()
     }
+    async train(page){
+        const gradients = tf.tidy(() => {
+          const inputTensor = this.haxai.getStateTensor();
+          return this.getGradientsAndSaveActions(inputTensor).grads;
+        });
 
+        this.pushGradients(this.gameGradients, gradients);
+        const action = this.currentActions_[0];
+        await this.haxai.update(action,page);
+        this.sleep(2000/60).then(()=>{
+          this.gameRewards.push(this.haxai.getStateTensor().arraySync()[0],this.haxai.getState());
+        })
+    }
+    async test(page){
+      tf.tidy(async() => {
+        const action = this.getActions(this.haxai.getStateTensor())[0];
+        await this.haxai.update(action,page);
+      });  
+    }
+    stop2(){
+      this.gameSteps.push(this.gameRewards.length);
+      this.pushGradients(this.allGradients, this.gameGradients);
+      this.allRewards.push(this.gameRewards);
+      this.gameRewards = [];
+      this.gameGradients = [];
+      tf.tidy(() => {
+        // The following line does three things:
+        // 1. Performs reward discounting, i.e., make recent rewards count more
+        //    than rewards from the further past. The effect is that the reward
+        //    values from a game with many steps become larger than the values
+        //    from a game with fewer steps.
+        // 2. Normalize the rewards, i.e., subtract the global mean value of the
+        //    rewards and divide the result by the global standard deviation of
+        //    the rewards. Together with step 1, this makes the rewards from
+        //    long-lasting games positive and rewards from short-lasting
+        //    negative.
+        // 3. Scale the gradients with the normalized reward values.
+        const normalizedRewards =
+            discountAndNormalizeRewards(this.allRewards, this.discountRate);
+        // Add the scaled gradients to the weights of the policy network. This
+        // step makes the policy network more likely to make choices that lead
+        // to long-lasting games in the future (i.e., the crux of this RL
+        // algorithm.)
+        this.optimizer.applyGradients(
+            scaleAndAverageGradients(this.allGradients, normalizedRewards));
+      });
+      tf.dispose(this.allGradients);
+      this.allGradients = [];
+      this.allRewards = [];
+      this.gameSteps = [];
+    }
     async replay() {
         // Sample from memory
         const batch = this.memory.sample(this.model.batchSize);
@@ -195,7 +252,7 @@ class Orchestrator {
        */
       getLogitsAndActions(inputs) {
         return tf.tidy(() => {
-          const logits = this.policyNet.predict(inputs);
+          const logits = this.model.predict(inputs);
     
           // Get the probability of the leftward action.
           const leftProb = tf.sigmoid(logits);

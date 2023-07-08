@@ -31,7 +31,7 @@ class Model {
         hiddenLayerSizes.forEach((hiddenLayerSize, i) => {
         this.network.add(tf.layers.dense({
             units: hiddenLayerSize,
-            activation: 'relu',
+            activation: 'elu',
             // `inputShape` is required only for the first layer.
             inputShape: i === 0 ? [this.numStates] : undefined
             }));
