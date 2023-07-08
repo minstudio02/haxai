@@ -31,7 +31,7 @@ class Model {
         hiddenLayerSizes.forEach((hiddenLayerSize, i) => {
         this.network.add(tf.layers.dense({
             units: hiddenLayerSize,
-            activation: 'elu',
+            activation: 'relu',
             // `inputShape` is required only for the first layer.
             inputShape: i === 0 ? [this.numStates] : undefined
             }));
@@ -55,7 +55,7 @@ class Model {
      * @param {tf.Tensor[]} yBatch
      */
     async train(xBatch, yBatch) {
-        await this.network.fit(xBatch, yBatch,{epochs:100});
+        await this.network.fit(xBatch, yBatch);
     }
 
     /**
