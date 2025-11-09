@@ -93,7 +93,7 @@ async function launchServer(args) {
     }
 
     while(true) {
-      await page.waitForTimeout(3000);
+      await new Promise((page) => setTimeout(page, 3000));
     }
     browser.close();
 }

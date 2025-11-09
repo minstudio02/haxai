@@ -94,7 +94,7 @@ class PolicyNetwork {
 
       // Randomly initialize the state of the cart-pole system at the beginning
       // of every game.
-      await this.orchestrator.run(page);
+      await this.orchestrator.train(page);
   }
 }
 

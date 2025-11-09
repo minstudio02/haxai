@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer');
+const {connect} = require('puppeteer-real-browser');
 const botCallbacks = require('./bot_callbacks.js');
 const { refreshActionFunction } = require('./bot_functions.js');
 const conf = require('./config.js');
@@ -47,29 +47,29 @@ async function getPolicy(){
 }
 
 const roomPassword = process.argv[5];
-let browser = null;
+let _browser = null;
 
 async function run () {
-    browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    bot.policy= await getPolicy()
-    await page.setViewport({ width: 2, height: 2 })
+    bot.policy= await getPolicy();
+    const {browser, page} = await connect({headless:true});
+    _browser = browser;
+    await new Promise((resolve) => setTimeout(resolve, 11000));
     await page.goto(roomLink);
     await page.waitForSelector("iframe");
 
-    var frames = await page.frames();
+    var frames = page.frames();
     var myframe = frames.find(f => f.url().indexOf("__cache_static__/g/game.html") > -1);
 
     const inputName = await myframe.$("input[type=text]");
-    await inputName.type(bot.name);
+    await inputName.type(bot.name,{delay: 200});
     const buttonName = await myframe.$("button");
-    await buttonName.click();
+    await buttonName.click({delay: 500});
 
     if(roomPassword) {
       const inputPassword = await myframe.$("input[data-hook=input]");
-      await inputPassword.type(roomPassword);
+      await inputPassword.type(roomPassword,{delay: 200});
       const buttonPassword = await myframe.$("button[data-hook=ok]");
-      await buttonPassword.click();
+      await buttonPassword.click({delay: 500});
     }
 
     try {
@@ -81,12 +81,12 @@ async function run () {
     await myframe.waitForSelector(".icon-menu", {timeout: (999999999)});
 
     await sendChat(page, "/avatar AI");
-    await page.waitForTimeout(1000);
+    await new Promise((page) => setTimeout(page, 1000));
     await sendChat(page, "!bot "+bot.adminToken+" "+bot.id);
 
     process.on('message', (message) => onServerMessage(message, page));
     while(await myframe.$(".icon-menu")) {
-      await page.waitForTimeout(10000);
+      await new Promise((page) => setTimeout(page, 10000));
     }
     cleanExit();
 }
@@ -107,7 +107,7 @@ async function onServerMessage(message, page) {
 }
 
 function cleanExit() {
-  browser.close();
+  _browser.close();
   console.log(bot.name+"'s process exited.");
   process.exit();
 };

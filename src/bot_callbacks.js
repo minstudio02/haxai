@@ -56,12 +56,9 @@ async function onGameTick(data, bot, page) {
     delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
   }
   bot.policy.haxai.setGameState(environment)
-  if(environment.bot.team!=0&&environment.tick%3==0){
-    if(conf.IS_TRAINING) await bot.policy.train(page)
-    else tf.tidy(async() => {
-      const action = bot.policy.model.chooseAction(bot.policy.haxai.getStateTensor(), 0);
-      await bot.policy.haxai.update(action,page);
-    });
+  if(environment.bot.team!=0 && environment.tick%3==0){
+    if(conf.IS_TRAINING) await bot.policy.train(page);
+    else await bot.policy.test(page);
   }
 }
 

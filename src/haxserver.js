@@ -1320,24 +1320,11 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
   }
   `
   
-  room.setTimeLimit(1);
+  room.setTimeLimit(5);
   room.setScoreLimit(0);
   room.setCustomStadium(stadiumFileText)
 
-  room.onPlayerJoin = async (player) => await onPlayerJoinListener(player);
-  onPlayerJoinListener = async function(player) {
-    let ip = decodeURIComponent(player.conn.replace(/(..)/g,'%$1'))
-    const request = await fetch(`https://ipapi.co/${ip}/json/`);
-    const response = await request.json();
-
-    if(response.country != 'KR'){
-      room.kickPlayer(player.id, 'Access Error', true); // kick
-      return;
-    }
-    if(['Bucheon-si','Gyeyang-gu','Bupyeong-gu'].find((i)=> i==response.city) != undefined && player.conn != '3231382E3135342E31312E3730'){
-      room.kickPlayer(player.id, 'Access Error', true); // kick
-      return;
-    }
+  room.onPlayerJoin = function(player) {
     room.players[player.id] = {
       bot: false,
       lastActivityTime: 0

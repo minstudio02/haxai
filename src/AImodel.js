@@ -2,77 +2,84 @@ const tf = require('@tensorflow/tfjs-node');
 
 
 class Model {
-    /**
-     * @param {number} numStates
-     * @param {number} numActions
-     * @param {number} batchSize
-     */
-
     constructor(hiddenLayerSizesOrModel, numStates, numActions, batchSize) {
-      this.numStates = numStates;
-      this.numActions = numActions;
-      this.batchSize = batchSize;
+        this.numStates = numStates;
+        this.numActions = numActions;
+        this.batchSize = batchSize;
 
-      if (hiddenLayerSizesOrModel instanceof tf.LayersModel) {
-        this.network = hiddenLayerSizesOrModel;
-        this.network.summary();
-        this.network.compile({optimizer: 'adam', loss: 'meanSquaredError'});
-     } else {
-        this.defineModel(hiddenLayerSizesOrModel);
-      }
+        if (hiddenLayerSizesOrModel instanceof tf.LayersModel) {
+            this.network = hiddenLayerSizesOrModel;
+        } else {
+            this.defineModel(hiddenLayerSizesOrModel);
+        }
     }
 
     defineModel(hiddenLayerSizes) {
-
         if (!Array.isArray(hiddenLayerSizes)) {
             hiddenLayerSizes = [hiddenLayerSizes];
         }
-        this.network = tf.sequential();
-        hiddenLayerSizes.forEach((hiddenLayerSize, i) => {
-        this.network.add(tf.layers.dense({
-            units: hiddenLayerSize,
-            activation: 'relu',
-            // `inputShape` is required only for the first layer.
-            inputShape: i === 0 ? [this.numStates] : undefined
-            }));
+
+        // Functional API를 사용하여 다중 출력 모델 생성
+        const input = tf.input({ shape: [this.numStates] });
+        
+        // 공통 백본 레이어
+        let x = input;
+        hiddenLayerSizes.forEach(size => {
+            x = tf.layers.dense({
+                units: size,
+                activation: 'relu'
+            }).apply(x);
         });
-        this.network.add(tf.layers.dense({units: this.numActions}));
+
+        // 정책 헤드 (행동 확률)
+        const policyHead = tf.layers.dense({
+            units: this.numActions,
+            activation: 'softmax',
+            name: 'policy'
+        }).apply(x);
+
+        // 가치 헤드 (상태 가치)
+        const valueHead = tf.layers.dense({
+            units: 1,
+            activation: 'linear',
+            name: 'value'
+        }).apply(x);
+
+        // 다중 출력 모델 생성
+        this.network = tf.model({ inputs: input, outputs: [policyHead, valueHead] });
 
         this.network.summary();
-        this.network.compile({optimizer: 'adam', loss: 'meanSquaredError'});
+        this.network.compile({
+            optimizer: 'adam',
+            loss: ['categoricalCrossentropy', 'meanSquaredError']
+        });
     }
 
-    /**
-     * @param {tf.Tensor | tf.Tensor[]} states
-     * @returns {tf.Tensor | tf.Tensor} The predictions of the best actions
-     */
     predict(states) {
-        return tf.tidy(() => this.network.predict(states));
+        return tf.tidy(() => {
+            const output = this.network.predict(states);
+            const actionProbs = output[0];
+            const stateValue = output[1];
+            return [actionProbs, stateValue];
+        });
     }
 
-    /**
-     * @param {tf.Tensor[]} xBatch
-     * @param {tf.Tensor[]} yBatch
-     */
     async train(xBatch, yBatch) {
-        await this.network.fit(xBatch, yBatch);
+        await this.network.fit(xBatch, yBatch, {epochs: 100});
     }
 
-    /**
-     * @param {tf.Tensor} state
-     * @returns {number} The action chosen by the model (-1 | 0 | 1)
-     */
     chooseAction(state, eps) {
-        if (Math.random() < eps) {
-            return Math.floor(Math.random() * this.numActions);
-        } else {
-            return tf.tidy(() => {
-                const logits = this.network.predict(state);
-                const sigmoid = tf.sigmoid(logits);
-                const probs = tf.div(sigmoid, tf.sum(sigmoid));
-                return tf.multinomial(probs, 1).dataSync()[0];
-            });
-        }
+        return tf.tidy(() => {
+            const [actionProbs] = this.predict(state);
+            
+            if (Math.random() < eps) {
+                // 탐험: 무작위 행동
+                return Math.floor(Math.random() * this.numActions);
+            } else {
+                // 활용: 확률적 선택
+                return tf.multinomial(actionProbs, 1).dataSync()[0];
+            }
+        });
     }
 }
 module.exports = { Model };
