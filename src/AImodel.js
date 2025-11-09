@@ -9,6 +9,11 @@ class Model {
 
         if (hiddenLayerSizesOrModel instanceof tf.LayersModel) {
             this.network = hiddenLayerSizesOrModel;
+            this.network.summary();
+            this.network.compile({
+                optimizer: 'adam',
+                loss: ['categoricalCrossentropy', 'meanSquaredError']
+            });
         } else {
             this.defineModel(hiddenLayerSizesOrModel);
         }
@@ -82,7 +87,7 @@ class Model {
         
         // epochs를 줄여서 안정성 향상
         await this.network.fit(xBatch, yBatch, {
-            epochs: 100,
+            epochs: 10,
             verbose: 1,
             callbacks: {
                 onBatchEnd: (batch, logs) => {

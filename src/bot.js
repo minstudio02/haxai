@@ -31,7 +31,7 @@ async function getPolicy(){
     policyNet = await SaveablePolicyNetwork.loadModel();
   }else{
     const hiddenLayerSizes =
-    '128,128,128,128'.trim().split(',').map(v => {
+    '128,128'.trim().split(',').map(v => {
       const num = Number.parseInt(v.trim());
       if (!(num > 0)) {
         throw new Error(
@@ -53,7 +53,7 @@ async function run () {
     bot.policy= await getPolicy();
     const {browser, page} = await connect({headless:false});
     _browser = browser;
-    await new Promise((resolve) => setTimeout(resolve, 7000));
+    await new Promise((resolve) => setTimeout(resolve, 8000));
     await page.goto(roomLink);
     await page.waitForSelector("iframe");
 

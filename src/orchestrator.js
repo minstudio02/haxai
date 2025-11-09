@@ -24,7 +24,7 @@ class Orchestrator {
       // PPO 하이퍼파라미터 개선
       this.clipEpsilon = 0.2;  // PPO 클리핑 범위
       this.ppoEpochs = 3;      // PPO 업데이트 에포크 수
-      this.valueCoeff = 0.5;   // 가치 손실 계수
+      this.valueCoeff = 0.5;   // 가치 손실 계수 (value loss가 너무 커서 낮춤)
       this.entropyCoeff = 0.01; // 엔트로피 정규화 계수
       this.learningRate = 3e-5; // 학습률 (NaN 방지를 위해 낮춤)
 
@@ -67,7 +67,8 @@ class Orchestrator {
 
   async replay() {
       // Sample from memory
-      const batch = this.memory.sample(this.model.batchSize);
+      const batch = this.memory.sample(this.model.batchSize * (2 ** 4));
+      this.memory.clear();
       if (!batch || batch.length === 0) {
         console.warn('Empty batch in replay, skipping');
         return;
@@ -102,12 +103,16 @@ class Orchestrator {
               currentQ[action] = nextState ? reward + this.discountRate * maxNextQ : reward;
               
               // 다음 상태의 가치를 사용하여 현재 상태의 가치 타겟 계산
-              const nextValue = nextState ? qsad[index].value.dataSync() : 0;
-              const targetValue = reward + this.discountRate * nextValue;
+              // 보상 정규화 및 가치 타겟 클리핑
+              const normalizedReward = Math.max(-10, Math.min(10, reward * 0.01));
+              const nextValue = nextState ? qsad[index].value.dataSync()[0] : 0;
+              const targetValue = normalizedReward + this.discountRate * nextValue;
+              // 가치 타겟 클리핑 (너무 큰 값 방지)
+              const clippedTargetValue = Math.max(-50, Math.min(50, targetValue));
               
               x.push(state.dataSync());
               yPolicy.push(currentQ.dataSync());
-              yValue.push(targetValue);
+              yValue.push(clippedTargetValue);
           }
       );
 
@@ -184,9 +189,10 @@ class Orchestrator {
     const states = tf.concat(batch.map(([state]) => state));
     const actions = tf.tensor1d(batch.map(([, action]) => action), 'int32');
     const rewards = tf.tensor1d(batch.map(([,, reward]) => {
-      // 보상 값 정규화 및 NaN 체크
+      // 보상 값 정규화 및 NaN 체크 (스케일링 적용)
       const r = isNaN(reward) || !isFinite(reward) ? 0 : reward;
-      return Math.max(-100, Math.min(100, r)); // 보상 클리핑
+      // 보상을 0.01 스케일로 정규화 (큰 보상 값 감소)
+      return Math.max(-10, Math.min(10, r * 0.01));
     }));
     const nextStates = tf.concat(batch.map(([,,, nextState]) => nextState));
     const oldActionProbs = tf.tensor1d(batch.map(([,,,, actionProb]) => {
@@ -206,7 +212,9 @@ class Orchestrator {
     // nextValues는 [batchSize, 1] 형태이므로 [batchSize]로 변환
     const nextValuesFlat = tf.squeeze(nextValues);
     const returns = rewards.add(tf.mul(this.discountRate, tf.mul(dones, nextValuesFlat)));
-    const advantages = returns.sub(oldValues);
+    // returns 클리핑 (가치 타겟이 너무 커지지 않도록)
+    const returnsClipped = tf.clipByValue(returns, -50, 50);
+    const advantages = returnsClipped.sub(oldValues);
 
     for (let epoch = 0; epoch < this.ppoEpochs; epoch++) {
       // variableGrads를 사용하기 위해 함수 내에서 loss를 계산
@@ -245,7 +253,14 @@ class Orchestrator {
         );
 
         const actorLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2)));
-        const criticLoss = tf.mean(tf.squaredDifference(newValuesFlat, returns));
+        // criticLoss 계산 (MSE 사용, 그래디언트 가능)
+        // returnsClipped는 외부 스코프에서 정의되었으므로 클로저로 접근
+        const valueError = tf.sub(newValuesFlat, returnsClipped);
+        // Huber loss 대신 클리핑된 MSE 사용 (outlier에 덜 민감하면서도 그래디언트 가능)
+        // 큰 오차를 클리핑하여 outlier의 영향을 줄임
+        const delta = 5.0; // 클리핑 threshold
+        const clippedError = tf.clipByValue(valueError, -delta, delta);
+        const criticLoss = tf.mean(tf.square(clippedError));
         
         // 엔트로피 계산: -sum(p * log(p + eps)) (NaN 방지)
         const eps = 1e-8;
@@ -290,6 +305,7 @@ class Orchestrator {
     oldValues.dispose();
     dones.dispose();
     returns.dispose();
+    returnsClipped.dispose();
     advantages.dispose();
     nextValues.dispose();
     nextValuesFlat.dispose();
