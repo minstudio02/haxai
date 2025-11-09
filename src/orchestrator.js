@@ -26,7 +26,7 @@ class Orchestrator {
       this.ppoEpochs = 3;      // PPO 업데이트 에포크 수
       this.valueCoeff = 0.5;   // 가치 손실 계수
       this.entropyCoeff = 0.01; // 엔트로피 정규화 계수
-      this.learningRate = 1e-4; // 학습률
+      this.learningRate = 3e-5; // 학습률 (NaN 방지를 위해 낮춤)
 
       // 옵티마이저 개선
       this.optimizer = tf.train.adam(this.learningRate);
@@ -97,17 +97,17 @@ class Orchestrator {
       // Update the states rewards with the discounted next states rewards
       batch.forEach(
           ([state, action, reward, nextState], index) => {
-              const currentQ = qsa[index].actionProbs.dataSync().slice();
-              const maxNextQ = nextState ? qsad[index].actionProbs.max().dataSync()[0] : 0;
+              const currentQ = qsa[index].actionProbs
+              const maxNextQ = qsad[index].actionProbs.max().dataSync()
               currentQ[action] = nextState ? reward + this.discountRate * maxNextQ : reward;
               
               // 다음 상태의 가치를 사용하여 현재 상태의 가치 타겟 계산
-              const nextValue = nextState ? qsad[index].value.dataSync()[0] : 0;
+              const nextValue = nextState ? qsad[index].value.dataSync() : 0;
               const targetValue = reward + this.discountRate * nextValue;
               
               x.push(state.dataSync());
-              yPolicy.push(currentQ);
-              yValue.push([targetValue]);
+              yPolicy.push(currentQ.dataSync());
+              yValue.push(targetValue);
           }
       );
 
@@ -180,12 +180,25 @@ class Orchestrator {
       return;
     }
 
+    // 입력 데이터 검증 및 정규화
     const states = tf.concat(batch.map(([state]) => state));
     const actions = tf.tensor1d(batch.map(([, action]) => action), 'int32');
-    const rewards = tf.tensor1d(batch.map(([,, reward]) => reward));
+    const rewards = tf.tensor1d(batch.map(([,, reward]) => {
+      // 보상 값 정규화 및 NaN 체크
+      const r = isNaN(reward) || !isFinite(reward) ? 0 : reward;
+      return Math.max(-100, Math.min(100, r)); // 보상 클리핑
+    }));
     const nextStates = tf.concat(batch.map(([,,, nextState]) => nextState));
-    const oldActionProbs = tf.tensor1d(batch.map(([,,,, actionProb]) => actionProb));
-    const oldValues = tf.tensor1d(batch.map(([,,,,, value]) => value));
+    const oldActionProbs = tf.tensor1d(batch.map(([,,,, actionProb]) => {
+      // 확률 값 검증 및 클리핑
+      const prob = isNaN(actionProb) || !isFinite(actionProb) ? 1e-8 : actionProb;
+      return Math.max(1e-8, Math.min(1.0, prob));
+    }));
+    const oldValues = tf.tensor1d(batch.map(([,,,,, value]) => {
+      // 가치 값 검증 및 클리핑
+      const v = isNaN(value) || !isFinite(value) ? 0 : value;
+      return Math.max(-1000, Math.min(1000, v));
+    }));
     const dones = tf.tensor1d(batch.map(([,,,,,, done]) => done ? 0 : 1));
 
     // nextStates에 대한 가치 예측 (두 번째 출력이 value)
@@ -200,6 +213,15 @@ class Orchestrator {
       const grads = tf.variableGrads(() => {
         const [newActionProbs, newValues] = this.model.predict(states);
         
+        // 입력 데이터 검증 (NaN 체크)
+        const hasNaN = tf.any(tf.isNaN(newActionProbs)).dataSync()[0] || 
+                      tf.any(tf.isNaN(newValues)).dataSync()[0] ||
+                      tf.any(tf.isNaN(advantages)).dataSync()[0];
+        if (hasNaN) {
+          console.warn('NaN detected in predictions or advantages, skipping update');
+          return tf.scalar(0);
+        }
+        
         // 각 샘플의 선택된 액션에 대한 확률만 가져오기
         // newActionProbs는 [batchSize, numActions] 형태
         // actions는 [batchSize] 형태의 액션 인덱스
@@ -210,35 +232,67 @@ class Orchestrator {
         // newValues는 [batchSize, 1] 형태이므로 [batchSize]로 변환
         const newValuesFlat = tf.squeeze(newValues);
         
-        // ratio 계산: 새로운 확률 / 이전 확률
-        const ratio = tf.div(selectedActionProbs, oldActionProbs);
+        // ratio 계산: 새로운 확률 / 이전 확률 (NaN 방지를 위해 작은 epsilon 추가)
+        const ratio = tf.div(selectedActionProbs, tf.add(oldActionProbs, 1e-8));
         
-        const surr1 = tf.mul(ratio, advantages);
+        // ratio 클리핑 (NaN 방지)
+        const clippedRatio = tf.clipByValue(ratio, 1e-8, 10.0);
+        
+        const surr1 = tf.mul(clippedRatio, advantages);
         const surr2 = tf.mul(
-          tf.clipByValue(ratio, 1 - this.clipEpsilon, 1 + this.clipEpsilon),
+          tf.clipByValue(clippedRatio, 1 - this.clipEpsilon, 1 + this.clipEpsilon),
           advantages
         );
 
         const actorLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2)));
         const criticLoss = tf.mean(tf.squaredDifference(newValuesFlat, returns));
         
-        // 엔트로피 계산: -sum(p * log(p))
-        const entropy = tf.neg(tf.sum(tf.mul(newActionProbs, tf.log(tf.add(newActionProbs, 1e-8))), 1));
+        // 엔트로피 계산: -sum(p * log(p + eps)) (NaN 방지)
+        const eps = 1e-8;
+        const probsWithEps = tf.clipByValue(tf.add(newActionProbs, eps), eps, 1.0);
+        const logProbs = tf.log(probsWithEps);
+        const entropy = tf.neg(tf.sum(tf.mul(newActionProbs, logProbs), 1));
         const entropyLoss = tf.mean(entropy);
 
         const totalLoss = actorLoss.add(tf.mul(this.valueCoeff, criticLoss)).sub(tf.mul(this.entropyCoeff, entropyLoss));
         
+        // 손실 값 검증
+        const lossValue = totalLoss.dataSync()[0];
+        if (isNaN(lossValue) || !isFinite(lossValue)) {
+          console.warn('NaN or Inf loss detected, skipping update');
+          return tf.scalar(0);
+        }
+        
         return totalLoss;
       });
       
-      this.optimizer.applyGradients(grads.grads);
+      // 그래디언트 클리핑 적용
+      const clippedGrads = {};
+      const clipValue = 0.5; // 그래디언트 클리핑 값
+      for (const [varName, grad] of Object.entries(grads.grads)) {
+        const clippedGrad = tf.clipByValue(grad, -clipValue, clipValue);
+        clippedGrads[varName] = clippedGrad;
+        grad.dispose(); // 원본 그래디언트 dispose
+      }
+      
+      this.optimizer.applyGradients(clippedGrads);
       
       // 그래디언트 텐서 정리
-      Object.values(grads.grads).forEach(grad => grad.dispose());
+      Object.values(clippedGrads).forEach(grad => grad.dispose());
     }
 
-    tf.dispose([states, actions, rewards, nextStates, oldActionProbs, oldValues, dones, 
-                returns, advantages, nextValues, nextValuesFlat]);
+    // 텐서 정리 (이미 dispose된 텐서는 제외)
+    states.dispose();
+    actions.dispose();
+    rewards.dispose();
+    nextStates.dispose();
+    oldActionProbs.dispose();
+    oldValues.dispose();
+    dones.dispose();
+    returns.dispose();
+    advantages.dispose();
+    nextValues.dispose();
+    nextValuesFlat.dispose();
   }
 
     computeReward(status, moreState) {

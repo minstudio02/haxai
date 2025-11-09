@@ -65,7 +65,33 @@ class Model {
     }
 
     async train(xBatch, yBatch) {
-        await this.network.fit(xBatch, yBatch, {epochs: 100});
+        // 입력 데이터 검증
+        const xData = xBatch.arraySync();
+        const yPolicyData = yBatch[0].arraySync();
+        const yValueData = yBatch[1].arraySync();
+        
+        // NaN 체크
+        const hasNaN = xData.some(row => row.some(val => isNaN(val) || !isFinite(val))) ||
+                      yPolicyData.some(row => row.some(val => isNaN(val) || !isFinite(val))) ||
+                      yValueData.some(row => row.some(val => isNaN(val) || !isFinite(val)));
+        
+        if (hasNaN) {
+            console.warn('NaN detected in training data, skipping training step');
+            return;
+        }
+        
+        // epochs를 줄여서 안정성 향상
+        await this.network.fit(xBatch, yBatch, {
+            epochs: 100,
+            verbose: 1,
+            callbacks: {
+                onBatchEnd: (batch, logs) => {
+                    if (isNaN(logs.loss) || !isFinite(logs.loss)) {
+                        console.warn('NaN loss detected during training');
+                    }
+                }
+            }
+        });
     }
 
     chooseAction(state, eps) {
