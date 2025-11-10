@@ -65,12 +65,12 @@ class PolicyNetwork {
   constructor(hiddenLayerSizesOrModel) {
     this.haxai = new HaxAI()
     this.memory = new Memory(10000);
-    this.model = new Model(hiddenLayerSizesOrModel, 14, 10, 128)
+    this.model = new Model(hiddenLayerSizesOrModel, 14, 10, 64)
     this.orchestrator= new Orchestrator(
       this.haxai,
       this.model,
       this.memory,
-      0.95
+      0.99
     )
   }
 

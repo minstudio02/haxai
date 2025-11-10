@@ -31,7 +31,7 @@ async function getPolicy(){
     policyNet = await SaveablePolicyNetwork.loadModel();
   }else{
     const hiddenLayerSizes =
-    '128,128'.trim().split(',').map(v => {
+    '64,256,128,64,32'.trim().split(',').map(v => {
       const num = Number.parseInt(v.trim());
       if (!(num > 0)) {
         throw new Error(

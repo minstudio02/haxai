@@ -1320,7 +1320,7 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
   }
   `
   
-  room.setTimeLimit(2);
+  room.setTimeLimit(1);
   room.setScoreLimit(0);
   room.setCustomStadium(stadiumFileText)
 

@@ -21,12 +21,14 @@ class Orchestrator {
       this.lastBallDistance = Infinity;  // 이전 프레임의 볼 거리
       this.lastBallPosition = {x: 0, y: 0};  // 이전 프레임의 볼 위치
 
-      // PPO 하이퍼파라미터 개선
-      this.clipEpsilon = 0.2;  // PPO 클리핑 범위
+      // PPO2 하이퍼파라미터
+      this.clipEpsilon = 0.2;  // PPO 클리핑 범위 (policy)
+      this.valueClipEpsilon = 0.2;  // PPO2 value 클리핑 범위
       this.ppoEpochs = 3;      // PPO 업데이트 에포크 수
-      this.valueCoeff = 0.5;   // 가치 손실 계수 (value loss가 너무 커서 낮춤)
+      this.valueCoeff = 0.5;   // 가치 손실 계수
       this.entropyCoeff = 0.01; // 엔트로피 정규화 계수
-      this.learningRate = 3e-5; // 학습률 (NaN 방지를 위해 낮춤)
+      this.learningRate = 7e-4; // 학습률
+      this.gaeLambda = 0.95;   // GAE lambda 파라미터
 
       // 옵티마이저 개선
       this.optimizer = tf.train.adam(this.learningRate);
@@ -81,14 +83,18 @@ class Orchestrator {
       
       // Predict the values of each action at each state
       const qsa = states.map((state) => {
-        const [actionProbs, value] = this.model.predict(state);
-        return { actionProbs, value };
+      const [policyLogits, value] = this.model.predict(state);
+      const actionProbs = tf.softmax(policyLogits);
+      policyLogits.dispose();
+      return { actionProbs, value };
       });
       
       // Predict the values of each action at each next state
       const qsad = nextStates.map((nextState) => {
-        const [actionProbs, value] = this.model.predict(nextState);
-        return { actionProbs, value };
+      const [policyLogits, value] = this.model.predict(nextState);
+      const actionProbs = tf.softmax(policyLogits);
+      policyLogits.dispose();
+      return { actionProbs, value };
       });
 
       let x = new Array();
@@ -142,9 +148,17 @@ class Orchestrator {
 
   getActionAndValue(stateTensor) {
     return tf.tidy(() => {
-      const [actionProbs, value] = this.model.predict(stateTensor);
-      const action = tf.multinomial(actionProbs, 1).dataSync()[0];
-      return [action, actionProbs.dataSync()[action], value.dataSync()[0]];
+      const [policyLogits, value] = this.model.predict(stateTensor);
+      const actionProbs = tf.softmax(policyLogits);
+      const sampled = tf.multinomial(policyLogits, 1);
+      const action = sampled.dataSync()[0];
+      const actionProb = actionProbs.dataSync()[action];
+      const valueScalar = value.dataSync()[0];
+      sampled.dispose();
+      policyLogits.dispose();
+      actionProbs.dispose();
+      value.dispose();
+      return [action, actionProb, valueScalar];
     });
   }
 
@@ -158,11 +172,11 @@ class Orchestrator {
  */
   getLogitsAndActions(inputs) {
     return tf.tidy(() => {
-      const [actionProbs, value] = this.model.predict(inputs);
+      const [policyLogits, value] = this.model.predict(inputs);
       if (value) value.dispose(); // 가치 출력은 사용하지 않으므로 dispose
-      
-      // actionProbs는 이미 softmax가 적용된 확률이므로 직접 사용
-      const actions = tf.multinomial(actionProbs, 1, null, true);
+      const actionProbs = tf.softmax(policyLogits);
+      const actions = tf.multinomial(policyLogits, 1);
+      policyLogits.dispose();
       return [actionProbs, actions];
     });
   }
@@ -208,18 +222,30 @@ class Orchestrator {
     const dones = tf.tensor1d(batch.map(([,,,,,, done]) => done ? 0 : 1));
 
     // nextStates에 대한 가치 예측 (두 번째 출력이 value)
-    const [, nextValues] = this.model.predict(nextStates);
+    const [nextPolicyLogits, nextValues] = this.model.predict(nextStates);
+    nextPolicyLogits.dispose();
     // nextValues는 [batchSize, 1] 형태이므로 [batchSize]로 변환
     const nextValuesFlat = tf.squeeze(nextValues);
+    
+    // GAE (Generalized Advantage Estimation) 계산
+    // returns = rewards + gamma * (1 - done) * nextValues
     const returns = rewards.add(tf.mul(this.discountRate, tf.mul(dones, nextValuesFlat)));
+    
+    // GAE advantages 계산: A_t = delta_t + (gamma * lambda) * A_{t+1}
+    // 여기서는 간단하게 returns - oldValues를 사용하지만, 
+    // 실제 GAE는 시간 순서대로 계산해야 함 (현재는 배치 샘플링이므로 근사)
+    const deltas = returns.sub(oldValues);
+    const advantages = deltas;  // GAE는 배치 샘플링 시 단순화
+    
     // returns 클리핑 (가치 타겟이 너무 커지지 않도록)
     const returnsClipped = tf.clipByValue(returns, -50, 50);
-    const advantages = returnsClipped.sub(oldValues);
 
     for (let epoch = 0; epoch < this.ppoEpochs; epoch++) {
       // variableGrads를 사용하기 위해 함수 내에서 loss를 계산
-      const grads = tf.variableGrads(() => {
-        const [newActionProbs, newValues] = this.model.predict(states);
+      const grads = tf.variableGrads(() => tf.tidy(() => {
+        const [newPolicyLogits, newValues] = this.model.predict(states);
+        const newActionProbs = tf.softmax(newPolicyLogits);
+        newPolicyLogits.dispose();
         
         // 입력 데이터 검증 (NaN 체크)
         const hasNaN = tf.any(tf.isNaN(newActionProbs)).dataSync()[0] || 
@@ -253,14 +279,19 @@ class Orchestrator {
         );
 
         const actorLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2)));
-        // criticLoss 계산 (MSE 사용, 그래디언트 가능)
-        // returnsClipped는 외부 스코프에서 정의되었으므로 클로저로 접근
-        const valueError = tf.sub(newValuesFlat, returnsClipped);
-        // Huber loss 대신 클리핑된 MSE 사용 (outlier에 덜 민감하면서도 그래디언트 가능)
-        // 큰 오차를 클리핑하여 outlier의 영향을 줄임
-        const delta = 5.0; // 클리핑 threshold
-        const clippedError = tf.clipByValue(valueError, -delta, delta);
-        const criticLoss = tf.mean(tf.square(clippedError));
+        
+        // PPO2 Value Function Clipping
+        // V_clipped = V_old + clip(V_new - V_old, -epsilon, epsilon)
+        const valueDiff = tf.sub(newValuesFlat, oldValues);
+        const valueClipped = tf.add(
+          oldValues,
+          tf.clipByValue(valueDiff, -this.valueClipEpsilon, this.valueClipEpsilon)
+        );
+        
+        // Clipped value loss와 unclipped value loss 중 최소값 사용
+        const valueError1 = tf.square(tf.sub(newValuesFlat, returnsClipped));
+        const valueError2 = tf.square(tf.sub(valueClipped, returnsClipped));
+        const criticLoss = tf.mul(0.5, tf.mean(tf.maximum(valueError1, valueError2)));
         
         // 엔트로피 계산: -sum(p * log(p + eps)) (NaN 방지)
         const eps = 1e-8;
@@ -270,16 +301,14 @@ class Orchestrator {
         const entropyLoss = tf.mean(entropy);
 
         const totalLoss = actorLoss.add(tf.mul(this.valueCoeff, criticLoss)).sub(tf.mul(this.entropyCoeff, entropyLoss));
-        
         // 손실 값 검증
         const lossValue = totalLoss.dataSync()[0];
         if (isNaN(lossValue) || !isFinite(lossValue)) {
           console.warn('NaN or Inf loss detected, skipping update');
           return tf.scalar(0);
         }
-        
         return totalLoss;
-      });
+      }));
       
       // 그래디언트 클리핑 적용
       const clippedGrads = {};
@@ -296,7 +325,7 @@ class Orchestrator {
       Object.values(clippedGrads).forEach(grad => grad.dispose());
     }
 
-    // 텐서 정리 (이미 dispose된 텐서는 제외)
+    // 텐서 정리 (PPO2 업데이트 완료 후)
     states.dispose();
     actions.dispose();
     rewards.dispose();
@@ -307,8 +336,9 @@ class Orchestrator {
     returns.dispose();
     returnsClipped.dispose();
     advantages.dispose();
-    nextValues.dispose();
+    deltas.dispose();
     nextValuesFlat.dispose();
+    nextValues.dispose();
   }
 
     computeReward(status, moreState) {
@@ -339,7 +369,7 @@ class Orchestrator {
       this.lastBallDistance = ballDistance;
 
       // 3. 볼 소유 보상 (볼과 매우 가까울 때)
-      const BALL_POSSESSION_DISTANCE = 16;  // 볼 소유로 간주하는 거리
+      const BALL_POSSESSION_DISTANCE = 22;  // 볼 소유로 간주하는 거리
       if (ballDistance < BALL_POSSESSION_DISTANCE) {
         reward += 10;  // 볼 소유 보상
         

@@ -12,7 +12,10 @@ class Model {
             this.network.summary();
             this.network.compile({
                 optimizer: 'adam',
-                loss: ['categoricalCrossentropy', 'meanSquaredError']
+                loss: [
+                    (yTrue, yPred) => tf.losses.softmaxCrossEntropy(yTrue, yPred),
+                    'meanSquaredError'
+                ]
             });
         } else {
             this.defineModel(hiddenLayerSizesOrModel);
@@ -29,17 +32,17 @@ class Model {
         
         // 공통 백본 레이어
         let x = input;
-        hiddenLayerSizes.forEach(size => {
+        hiddenLayerSizes.forEach((size,id) => {
             x = tf.layers.dense({
                 units: size,
-                activation: 'relu'
+                activation: id == 2 || id  == 3 ? 'relu' : 'tanh'
             }).apply(x);
         });
 
         // 정책 헤드 (행동 확률)
         const policyHead = tf.layers.dense({
             units: this.numActions,
-            activation: 'softmax',
+            activation: 'linear',
             name: 'policy'
         }).apply(x);
 
@@ -56,16 +59,19 @@ class Model {
         this.network.summary();
         this.network.compile({
             optimizer: 'adam',
-            loss: ['categoricalCrossentropy', 'meanSquaredError']
+            loss: [
+                (yTrue, yPred) => tf.losses.softmaxCrossEntropy(yTrue, yPred),
+                'meanSquaredError'
+            ]
         });
     }
 
     predict(states) {
         return tf.tidy(() => {
             const output = this.network.predict(states);
-            const actionProbs = output[0];
+            const policyLogits = output[0];
             const stateValue = output[1];
-            return [actionProbs, stateValue];
+            return [policyLogits, stateValue];
         });
     }
 
@@ -87,7 +93,7 @@ class Model {
         
         // epochs를 줄여서 안정성 향상
         await this.network.fit(xBatch, yBatch, {
-            epochs: 10,
+            epochs: 4,
             verbose: 1,
             callbacks: {
                 onBatchEnd: (batch, logs) => {
@@ -101,14 +107,24 @@ class Model {
 
     chooseAction(state, eps) {
         return tf.tidy(() => {
-            const [actionProbs] = this.predict(state);
-            
+            const [policyLogits, stateValue] = this.predict(state);
+            const actionProbs = tf.softmax(policyLogits);
+
             if (Math.random() < eps) {
                 // 탐험: 무작위 행동
+                policyLogits.dispose();
+                actionProbs.dispose();
+                stateValue.dispose();
                 return Math.floor(Math.random() * this.numActions);
             } else {
                 // 활용: 확률적 선택
-                return tf.multinomial(actionProbs, 1).dataSync()[0];
+                const sampled = tf.multinomial(policyLogits, 1);
+                const action = sampled.dataSync()[0];
+                sampled.dispose();
+                policyLogits.dispose();
+                actionProbs.dispose();
+                stateValue.dispose();
+                return action;
             }
         });
     }
