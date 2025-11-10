@@ -72,7 +72,6 @@ async function onGameStart(data, bot, page) {
 }
 async function onGameStop(data, bot, page) {
   if(conf.IS_TRAINING && bot.policy.haxai.getState().bot_Team!=0){
-    await bot.policy.orchestrator.stop()
     await bot.policy.saveModel();
   }
 }
