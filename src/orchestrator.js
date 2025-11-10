@@ -216,6 +216,8 @@ class Orchestrator {
     deltas.dispose();
     nextValuesFlat.dispose();
     nextValues.dispose();
+
+    this.memory.clear();
   }
 
     computeReward(status, moreState) {
