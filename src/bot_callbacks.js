@@ -69,6 +69,8 @@ async function onPositionsReset(data, bot, page) {
 async function onGameStart(data, bot, page) {
   delayBeforePlay = conf.DELAY_BEFORE_PLAY;
   lastTickData = null;
+  bot.policy.orchestrator.own_score = 0
+  bot.policy.orchestrator.opponent_score = 0
 }
 async function onGameStop(data, bot, page) {
   if(conf.IS_TRAINING && bot.policy.haxai.getState().bot_Team!=0){

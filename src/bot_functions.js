@@ -1,7 +1,5 @@
 const decache = require('decache');
 const conf = require('./config.js');
-var vec = require('./vectors.js');
-
 
 const keyHold = {};
 
@@ -108,16 +106,6 @@ async function resetAllKeysExceptFor(page, ...exceptions) {
   });
 }
 
-function computePlayerVelocity(playerId, lastData, currentData) {
-  if(lastData && lastData.players[playerId] && lastData.players[playerId].position &&
-    currentData && currentData.players[playerId] && currentData.players[playerId].position) {
-    var lastPlayerPosition = lastData.players[playerId].position;
-    var curPlayerPosition = currentData.players[playerId].position;
-    return vec.div(vec.sub(curPlayerPosition, lastPlayerPosition), currentData.tick - lastData.tick);
-  }
-  return playerVelocity = { x: 0, y: 0 };
-}
-
 function getBotRelativeGameEnv(dataHistory, bot) {
   var lastTickNumber = Math.max(...Object.keys(dataHistory));
   var currentData = dataHistory[lastTickNumber];
@@ -127,11 +115,11 @@ function getBotRelativeGameEnv(dataHistory, bot) {
     return null;
   }
 
-  var botVelocity = computePlayerVelocity(localPlayer.id, lastData, currentData);
+  var botVelocity = localPlayer.velocity;
 
   var ballVelocity;
   if(lastData) {
-    ballVelocity = vec.div(vec.sub(currentData.ball, lastData.ball), currentData.tick - lastData.tick);
+    ballVelocity = { x: currentData.ball.xspeed , y: currentData.ball.yspeed };
   }
   else {
     ballVelocity = { x: 0, y: 0 };
@@ -153,7 +141,7 @@ function getBotRelativeGameEnv(dataHistory, bot) {
       timeLimit: currentData.scores.timeLimit
     },
     ball: {
-      position: currentData.ball,
+      position: { x: currentData.ball.x , y: currentData.ball.y },
       velocity: ballVelocity,
     },
     teammates: [],
@@ -173,7 +161,7 @@ function getBotRelativeGameEnv(dataHistory, bot) {
       return;
     }
 
-    var playerVelocity = computePlayerVelocity(player.id, lastData, currentData);
+    var playerVelocity = player.velocity;
 
     var relativePlayerInfo = {
       id: player.id,
@@ -184,12 +172,6 @@ function getBotRelativeGameEnv(dataHistory, bot) {
     (player.team == localPlayer.team ? relativeEnv.teammates : relativeEnv.opponents).push(relativePlayerInfo);
   });
 
-  if(localPlayer.team == conf.BLUE_TEAM) {
-    relativeEnv = vec.transformVectors(relativeEnv, (vector) => ({
-      x: vector.x * -1,
-      y: vector.y * -1
-    }));
-  }
   return relativeEnv;
 }
 

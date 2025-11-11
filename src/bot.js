@@ -1,4 +1,4 @@
-const {connect} = require('puppeteer-real-browser');
+const puppeteer = require('puppeteer');
 const botCallbacks = require('./bot_callbacks.js');
 const { refreshActionFunction } = require('./bot_functions.js');
 const conf = require('./config.js');
@@ -47,18 +47,31 @@ async function getPolicy(){
 }
 
 const roomPassword = process.argv[5];
-let _browser = null;
+let browser = null;
 
 async function run () {
     bot.policy= await getPolicy();
-    const {browser, page} = await connect({headless:false});
-    _browser = browser;
+    browser = await puppeteer.launch({headless:false});
+    const page = await browser.newPage();
+
     await new Promise((resolve) => setTimeout(resolve, 8000));
     await page.goto(roomLink);
     await page.waitForSelector("iframe");
 
     var frames = page.frames();
     var myframe = frames.find(f => f.url().indexOf("__cache_static__/g/game.html") > -1);
+
+    const inputName = await myframe.$("input[type=text]");
+    await inputName.type(bot.name);
+    const buttonName = await myframe.$("button");
+    await buttonName.click({delay: 7000});
+
+    if(roomPassword) {
+      const inputPassword = await myframe.$("input[data-hook=input]");
+      await inputPassword.type(roomPassword);
+      const buttonPassword = await myframe.$("button[data-hook=ok]");
+      await buttonPassword.click({delay: 7000});
+    }
 
     try {
       await myframe.waitForSelector(".icon-menu");
@@ -95,7 +108,7 @@ async function onServerMessage(message, page) {
 }
 
 function cleanExit() {
-  _browser.close();
+  browser.close();
   console.log(bot.name+"'s process exited.");
   process.exit();
 };

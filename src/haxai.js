@@ -21,17 +21,17 @@ class HaxAI {
   constructor() {
       // Constants that characterize the system.
 
-    this.bot_Position = {x:0,y:0};
-    this.bot_Speed = {x:0,y:0};
-    this.op_Position = {x:0,y:0};
-    this.op_Speed = {x:0,y:0};
-    this.ball_Position = {x:0,y:0};
-    this.ball_Speed = {x:0,y:0};
+    this.bot_Position = {x: 0, y: 0};
+    this.bot_Speed = {x: 0, y: 0};
+    this.op_Position = {x: 0, y: 0};
+    this.op_Speed = {x: 0, y: 0};
+    this.ball_Position = {x: 0, y: 0};
+    this.ball_Speed = {x: 0, y: 0};
     this.dist_bw_myball = 0;
     this.field_Locked = 1
-    this.bot_Team=0
-    this.start_Team=1
-    this.game_State=false
+    this.bot_Team = 0
+    this.start_Team = 1
+    this.game_State = false
     this.score
 
   }
@@ -43,18 +43,18 @@ class HaxAI {
     // The state variables of the mountain car system.
     this.bot_Position = env.bot.position;
     this.bot_Speed = env.bot.velocity;
-    this.op_Position = env.opponents[0]?.position??{x:0,y:0};
-    this.op_Speed = env.opponents[0]?.velocity??{x:0,y:0};
+    this.op_Position = env.opponents[0] ? env.opponents[0].position : {x: 0, y: 0};
+    this.op_Speed = env.opponents[0] ? env.opponents[0].velocity : {x: 0, y: 0};
     this.ball_Position = env.ball.position;
     this.ball_Speed = env.ball.velocity;
-    this.dist_bw_myball = Math.sqrt(Math.pow(this.bot_Position.x-this.ball_Position.x, 2) + Math.pow(this.bot_Position.y-this.ball_Position.y, 2));
-    this.field_Locked = env.bot.team==1?
-      env.model.start_Team==2 && !env.model.game_State :
-      env.model.start_Team==1 && !env.model.game_State
-    this.bot_Team=env.bot.team
-    this.start_Team=env.model.start_Team
-    this.game_State=env.model.game_State
-    this.score=env.score
+    this.dist_bw_myball = Math.sqrt(Math.pow(env.bot.position.x - env.ball.position.x, 2) + Math.pow(env.bot.position.y - env.ball.position.y, 2));
+    this.field_Locked = env.bot.team == 1?
+      env.model.start_Team == 2 && !env.model.game_State :
+      env.model.start_Team == 1 && !env.model.game_State
+    this.bot_Team = env.bot.team
+    this.start_Team = env.model.start_Team
+    this.game_State = env.model.game_State
+    this.score = env.score
   } 
 
   /**
@@ -79,10 +79,10 @@ class HaxAI {
   }
   getState() {
     return {
-      bot_Team:this.bot_Team,
-      start_Team:this.start_Team,
-      game_State:this.game_State,
-      score:this.score
+      bot_Team: this.bot_Team,
+      start_Team: this.start_Team,
+      game_State: this.game_State,
+      score: this.score
     };
   }
 
@@ -118,7 +118,7 @@ class HaxAI {
    * @returns {bool} Whether the simulation is done.
    */
   isDone() {
-    return this.score==undefined ? false:this.score.ownTeam > this.score.opponentTeam
+    return this.score == undefined ? false : this.score.ownTeam > this.score.opponentTeam
   }
 }
 module.exports = { HaxAI };

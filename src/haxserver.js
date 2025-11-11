@@ -1369,16 +1369,22 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
     tickNumber++;
 
     var data = {};
-    data.ball = room.getBallPosition();
+    data.ball = room.getDiscProperties(0);
     data.players = {};
-    room.getPlayerList().forEach((player) => {
-      data.players[player.id] = player;
+    room.getPlayerList().filter((player) => player.team != 0).forEach((player) => {
+      data.players[player.id] = {
+        ...player, 
+        velocity: {
+            x: room.getPlayerDiscProperties(player.id).xspeed, 
+            y: room.getPlayerDiscProperties(player.id).yspeed
+        }
+      };
     });
     data.tick = tickNumber;
     data.scores = room.getScores();
     data.gameEnded = gameEnded;
-    data.started=game_started
-    data.init_team=start_team
+    data.started = game_started
+    data.init_team = start_team
     window.messageToServer("onGameTick", data);
 
     if(data.ball.x == 0 && data.ball.y == 0) {
@@ -1414,7 +1420,7 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
     game_started=false
   }
   room.onTeamGoal = function(team) {
-    start_team= team==1?2:1
+    start_team = team == 1 ? 2 : 1
   }
   room.onPlayerBallKick = function(player) {
     if(game_started==false){

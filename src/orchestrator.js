@@ -220,126 +220,126 @@ class Orchestrator {
     this.memory.clear();
   }
 
-    computeReward(status, moreState) {
-      // 보상 함수 개선
-      let reward = 0;
+  computeReward(status, moreState) {
+    // 보상 함수 개선
+    let reward = 0;
 
-      // 상태 변수 추출
-      const botPos = {x: status[0], y: status[1]};
-      const botVel = {x: status[2], y: status[3]};
-      const opPos = {x: status[4], y: status[5]};
-      const ballPos = {x: status[8], y: status[9]};
-      const ballVel = {x: status[10], y: status[11]};
-      const ballDistance = status[12];  // 이미 계산된 거리
+    // 상태 변수 추출
+    const botPos = {x: status[0], y: status[1]};
+    const botVel = {x: status[2], y: status[3]};
+    const opPos = {x: status[4], y: status[5]};
+    const ballPos = {x: status[8], y: status[9]};
+    const ballVel = {x: status[10], y: status[11]};
+    const ballDistance = status[12];  // 이미 계산된 거리
+    
+    // 골대 위치 (플레이어 팀에 따라 다름)
+    const goalX = moreState.bot_Team == 1 ? 320 : -320;  // 상대 골대 x 좌표
+    const goalY = 0;    // 골대 중앙 y 좌표
+
+    // 1. 볼과의 거리 보상 (볼에 가까워질수록 보상, 지수적 감소)
+    const ballProximityReward = Math.exp(-ballDistance / 50) * 5;
+    reward += ballProximityReward;
+
+    // 2. 볼에 가까워지는 것에 대한 보상 (거리 변화)
+    if (this.lastBallDistance !== Infinity) {
+      const distanceImprovement = this.lastBallDistance - ballDistance;
+      reward += distanceImprovement * 2;  // 가까워질수록 보상
+    }
+    this.lastBallDistance = ballDistance;
+
+    // 3. 볼 소유 보상 (볼과 매우 가까울 때)
+    const BALL_POSSESSION_DISTANCE = 22;  // 볼 소유로 간주하는 거리
+    if (ballDistance < BALL_POSSESSION_DISTANCE) {
+      reward += 10;  // 볼 소유 보상
       
-      // 골대 위치 (플레이어 팀에 따라 다름)
-      const goalX = moreState.bot_Team == 1 ? 320 : -320;  // 상대 골대 x 좌표
-      const goalY = 0;    // 골대 중앙 y 좌표
-
-      // 1. 볼과의 거리 보상 (볼에 가까워질수록 보상, 지수적 감소)
-      const ballProximityReward = Math.exp(-ballDistance / 50) * 5;
-      reward += ballProximityReward;
-
-      // 2. 볼에 가까워지는 것에 대한 보상 (거리 변화)
-      if (this.lastBallDistance !== Infinity) {
-        const distanceImprovement = this.lastBallDistance - ballDistance;
-        reward += distanceImprovement * 2;  // 가까워질수록 보상
-      }
-      this.lastBallDistance = ballDistance;
-
-      // 3. 볼 소유 보상 (볼과 매우 가까울 때)
-      const BALL_POSSESSION_DISTANCE = 22;  // 볼 소유로 간주하는 거리
-      if (ballDistance < BALL_POSSESSION_DISTANCE) {
-        reward += 10;  // 볼 소유 보상
-        
-        // 4. 볼을 골대 방향으로 차는 것에 대한 보상
-        const toGoalVector = {x: goalX - ballPos.x, y: goalY - ballPos.y};
-        const ballToGoalAlignment = this.vectorAlignment(
-          [toGoalVector.x, toGoalVector.y],
-          [ballVel.x, ballVel.y]
-        );
-        reward += ballToGoalAlignment * 15;  // 골대 방향으로 차면 보상
-        
-        // 5. 골대 근처에서의 보상 (골대 100 이내)
-        const goalDistance = Math.sqrt(
-          Math.pow(ballPos.x - goalX, 2) + Math.pow(ballPos.y - goalY, 2)
-        );
-        if (goalDistance < 100) {
-          reward += (100 - goalDistance) / 10;  // 골대에 가까울수록 보상
-        }
-      }
-
-      // 6. 볼 속도 보상 (볼을 빠르게 움직일 때, 특히 골대 방향으로)
-      const ballSpeed = Math.sqrt(ballVel.x ** 2 + ballVel.y ** 2);
-      if (ballSpeed > 0) {
-        const toGoalVector = {x: goalX - ballPos.x, y: goalY - ballPos.y};
-        const speedAlignment = this.vectorAlignment(
-          [toGoalVector.x, toGoalVector.y],
-          [ballVel.x, ballVel.y]
-        );
-        reward += ballSpeed * speedAlignment * 0.5;  // 골대 방향으로 빠르게 움직일 때 보상
-      }
-
-      // 7. 움직임 보상 (가만히 있지 않고 움직일 때)
-      const botSpeed = Math.sqrt(botVel.x ** 2 + botVel.y ** 2);
-      if (botSpeed > 0.1) {
-        reward += botSpeed * 0.1;  // 움직일 때 작은 보상
-      } else {
-        reward -= 0.5;  // 가만히 있으면 페널티
-      }
-
-      // 8. 상대방과의 거리 고려 (수비/공격 상황)
-      const opDistance = Math.sqrt(
-        Math.pow(botPos.x - opPos.x, 2) + Math.pow(botPos.y - opPos.y, 2)
+      // 4. 볼을 골대 방향으로 차는 것에 대한 보상
+      const toGoalVector = {x: goalX - ballPos.x, y: goalY - ballPos.y};
+      const ballToGoalAlignment = this.vectorAlignment(
+        [toGoalVector.x, toGoalVector.y],
+        [ballVel.x, ballVel.y]
       );
+      reward += ballToGoalAlignment * 15;  // 골대 방향으로 차면 보상
       
-      // 볼을 가지고 있을 때 상대방과의 거리
-      if (ballDistance < BALL_POSSESSION_DISTANCE) {
-        if (opDistance < 50) {
-          reward -= 5;  // 상대방이 가까이 있으면 페널티 (압박)
-        }
-      } else {
-        // 볼을 가지고 있지 않을 때 상대방과 볼 사이에 위치
-        const ballToOpDistance = Math.sqrt(
-          Math.pow(opPos.x - ballPos.x, 2) + Math.pow(opPos.y - ballPos.y, 2)
-        );
-        if (ballToOpDistance < ballDistance) {
-          // 상대방이 볼에 더 가까우면 수비 보상
-          reward += 2;
-        }
+      // 5. 골대 근처에서의 보상 (골대 100 이내)
+      const goalDistance = Math.sqrt(
+        Math.pow(ballPos.x - goalX, 2) + Math.pow(ballPos.y - goalY, 2)
+      );
+      if (goalDistance < 100) {
+        reward += (100 - goalDistance) / 10;  // 골대에 가까울수록 보상
       }
+    }
 
-      // 9. 골 보상/페널티
-      if (moreState.score.ownTeam > this.own_score) {
-          reward += 1000;  // 골 성공 시 큰 보상
-          this.own_score = moreState.score.ownTeam;
-      }
-      if (moreState.score.opponentTeam > this.opponent_score) {
-          reward -= 500;  // 실점 시 큰 페널티
-          this.opponent_score = moreState.score.opponentTeam;
-      }
+    // 6. 볼 속도 보상 (볼을 빠르게 움직일 때, 특히 골대 방향으로)
+    const ballSpeed = Math.sqrt(ballVel.x ** 2 + ballVel.y ** 2);
+    if (ballSpeed > 0) {
+      const toGoalVector = {x: goalX - ballPos.x, y: goalY - ballPos.y};
+      const speedAlignment = this.vectorAlignment(
+        [toGoalVector.x, toGoalVector.y],
+        [ballVel.x, ballVel.y]
+      );
+      reward += ballSpeed * speedAlignment * 0.5;  // 골대 방향으로 빠르게 움직일 때 보상
+    }
 
-      // 10. 게임 상태 페널티
-      if (!moreState.game_State) {
-          reward -= 0.5;  // 게임 시작 지연에 대한 페널티
-      }
+    // 7. 움직임 보상 (가만히 있지 않고 움직일 때)
+    const botSpeed = Math.sqrt(botVel.x ** 2 + botVel.y ** 2);
+    if (botSpeed > 0.1) {
+      reward += botSpeed * 0.1;  // 움직일 때 작은 보상
+    } else {
+      reward -= 0.5;  // 가만히 있으면 페널티
+    }
 
-      // 11. 볼이 골대 근처로 이동할 때 보상
-      if (this.lastBallPosition.x !== 0 || this.lastBallPosition.y !== 0) {
-        const lastGoalDistance = Math.sqrt(
-          Math.pow(this.lastBallPosition.x - goalX, 2) + 
-          Math.pow(this.lastBallPosition.y - goalY, 2)
-        );
-        const currentGoalDistance = Math.sqrt(
-          Math.pow(ballPos.x - goalX, 2) + Math.pow(ballPos.y - goalY, 2)
-        );
-        if (currentGoalDistance < lastGoalDistance) {
-          reward += (lastGoalDistance - currentGoalDistance) * 0.1;  // 골대에 가까워질수록 보상
-        }
+    // 8. 상대방과의 거리 고려 (수비/공격 상황)
+    const opDistance = Math.sqrt(
+      Math.pow(botPos.x - opPos.x, 2) + Math.pow(botPos.y - opPos.y, 2)
+    );
+    
+    // 볼을 가지고 있을 때 상대방과의 거리
+    if (ballDistance < BALL_POSSESSION_DISTANCE) {
+      if (opDistance < 50) {
+        reward -= 5;  // 상대방이 가까이 있으면 페널티 (압박)
       }
-      this.lastBallPosition = {x: ballPos.x, y: ballPos.y};
+    } else {
+      // 볼을 가지고 있지 않을 때 상대방과 볼 사이에 위치
+      const ballToOpDistance = Math.sqrt(
+        Math.pow(opPos.x - ballPos.x, 2) + Math.pow(opPos.y - ballPos.y, 2)
+      );
+      if (ballToOpDistance < ballDistance) {
+        // 상대방이 볼에 더 가까우면 수비 보상
+        reward += 2;
+      }
+    }
 
-      return reward;
+    // 9. 골 보상/페널티
+    if (moreState.score.ownTeam > this.own_score) {
+        reward += 1000;  // 골 성공 시 큰 보상
+        this.own_score = moreState.score.ownTeam;
+    }
+    if (moreState.score.opponentTeam > this.opponent_score) {
+        reward -= 500;  // 실점 시 큰 페널티
+        this.opponent_score = moreState.score.opponentTeam;
+    }
+
+    // 10. 게임 상태 페널티
+    if (!moreState.game_State) {
+        reward -= 0.5;  // 게임 시작 지연에 대한 페널티
+    }
+
+    // 11. 볼이 골대 근처로 이동할 때 보상
+    if (this.lastBallPosition.x !== 0 || this.lastBallPosition.y !== 0) {
+      const lastGoalDistance = Math.sqrt(
+        Math.pow(this.lastBallPosition.x - goalX, 2) + 
+        Math.pow(this.lastBallPosition.y - goalY, 2)
+      );
+      const currentGoalDistance = Math.sqrt(
+        Math.pow(ballPos.x - goalX, 2) + Math.pow(ballPos.y - goalY, 2)
+      );
+      if (currentGoalDistance < lastGoalDistance) {
+        reward += (lastGoalDistance - currentGoalDistance) * 0.1;  // 골대에 가까워질수록 보상
+      }
+    }
+    this.lastBallPosition = {x: ballPos.x, y: ballPos.y};
+
+    return reward;
   }
 
   vectorAlignment(vec1, vec2) {
