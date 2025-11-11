@@ -81,10 +81,8 @@ class Orchestrator {
   }
   
   async test(page){
-    tf.tidy(async() => {
-      const action = this.getActions(this.haxai.getStateTensor())[0];
-      await this.haxai.update(action,page);
-    });  
+    const action = this.getActions(this.haxai.getStateTensor())[0];
+    await this.haxai.update(action,page);
   }
 
   getActionAndValue(stateTensor) {
