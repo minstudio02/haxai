@@ -36,7 +36,7 @@ async function onGameStop(data, server) {
   sendMessageToAllBots(server.bots, "onGameStop", {});
 };
 async function onPlayerChat(data, server) {
-  modifyStatus(data)
+  sendMessageToAllBots(server.bots, "onPlayerChat", data);
 };
 
 async function onBotAuthentification(data, server) {

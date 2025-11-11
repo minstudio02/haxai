@@ -55,10 +55,12 @@ async function onGameTick(data, bot, page) {
   if(goalJustScored) {
     delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
   }
+
   bot.policy.haxai.setGameState(environment)
-  if(environment.bot.team!=0 && environment.tick%3==0){
+
+  if(environment.bot.team != 0 && environment.tick % 3 == 0){
     if(conf.IS_TRAINING) await bot.policy.train(page);
-    else await bot.policy.test(page);
+    else await bot.policy.orchestrator.test(page);
   }
 }
 
@@ -73,10 +75,14 @@ async function onGameStart(data, bot, page) {
   bot.policy.orchestrator.opponent_score = 0
 }
 async function onGameStop(data, bot, page) {
-  if(conf.IS_TRAINING && bot.policy.haxai.getState().bot_Team!=0){
+  if(conf.IS_TRAINING && bot.policy.haxai.getState().bot_Team != 0){
     await bot.policy.saveModel();
   }
 }
+
+async function onPlayerChat(data, bot, page) {
+  conf.IS_TRAINING = data
+};
 
 async function onActionFileRefresh(data, bot, page) {
   if(data.actionFile) {
@@ -85,4 +91,4 @@ async function onActionFileRefresh(data, bot, page) {
   refreshActionFunction(bot);
 }
 
-module.exports = { onBotAuthentification, onGameTick, onPositionsReset, onGameStart, onGameStop, onActionFileRefresh };
+module.exports = { onBotAuthentification, onGameTick, onPositionsReset, onGameStart, onGameStop, onPlayerChat, onActionFileRefresh };

@@ -16,6 +16,7 @@ class Orchestrator {
       this.memory = memory;
       this.discountRate = discountRate;
 
+      this.not_started_yet = 0
       this.own_score=0
       this.opponent_score=0
       this.lastBallDistance = Infinity;  // 이전 프레임의 볼 거리
@@ -30,12 +31,35 @@ class Orchestrator {
       this.learningRate = 7e-4; // 학습률
       this.gaeLambda = 0.95;   // GAE lambda 파라미터
 
+      // 학습률 스케줄링 파라미터
+      this.initialLearningRate = this.learningRate;
+      this.minLearningRate = 1e-5;   // 최저 학습률
+      this.lrDecay = 0.98;           // 업데이트마다 곱할 감쇠율 (지수 감소)
+      this.updateCount = 0;          // 스케줄 적용 횟수
+
       // 옵티마이저 개선
       this.optimizer = tf.train.adam(this.learningRate);
   }
 
   sleep (time) {
     return new Promise((resolve) => setTimeout(resolve, time));
+  }
+
+  // 학습률 스케줄링: 지수감쇠 방식
+  updateLearningRate() {
+    this.updateCount += 1;
+    const decayed = this.initialLearningRate * Math.pow(this.lrDecay, this.updateCount);
+    const newLR = Math.max(this.minLearningRate, decayed);
+    if (this.optimizer && typeof this.optimizer.dispose === 'function') {
+      this.optimizer.dispose();
+    }
+    this.learningRate = newLR;
+    this.optimizer = tf.train.adam(this.learningRate);
+    try {
+      console.log(`[LR 스케줄러] 업데이트 ${this.updateCount}회 - 학습률: ${this.learningRate.toExponential(2)}`);
+    } catch (_) {
+      // 콘솔 포맷이 실패해도 학습에는 영향 없음
+    }
   }
 
   async train(page) {
@@ -52,7 +76,7 @@ class Orchestrator {
       this.memory.addSample([stateTensor, action, reward, nextState, actionProb, value, done]);
 
       if (this.memory.samples.length % this.model.batchSize == 0) {
-        await this.ppoUpdate();
+        this.ppoUpdate();
       }
   }
   
@@ -108,7 +132,7 @@ class Orchestrator {
     return this.getLogitsAndActions(inputs)[1].dataSync();
   }
 
-  async ppoUpdate() {
+  ppoUpdate() {
     const batch = this.memory.samples.slice(-this.model.batchSize);
     if (!batch || batch.length === 0) {
       console.warn('Empty batch in ppoUpdate, skipping');
@@ -217,136 +241,63 @@ class Orchestrator {
     nextValuesFlat.dispose();
     nextValues.dispose();
 
+    // 학습률 스케줄링 적용 (업데이트 1회 완료 후 감소)
+    this.updateLearningRate();
     this.memory.clear();
   }
 
-  computeReward(status, moreState) {
-    // 보상 함수 개선
-    let reward = 0;
+    computeReward(status,more_state) {
+      let reward = 0
 
-    // 상태 변수 추출
-    const botPos = {x: status[0], y: status[1]};
-    const botVel = {x: status[2], y: status[3]};
-    const opPos = {x: status[4], y: status[5]};
-    const ballPos = {x: status[8], y: status[9]};
-    const ballVel = {x: status[10], y: status[11]};
-    const ballDistance = status[12];  // 이미 계산된 거리
-    
-    // 골대 위치 (플레이어 팀에 따라 다름)
-    const goalX = moreState.bot_Team == 1 ? 320 : -320;  // 상대 골대 x 좌표
-    const goalY = 0;    // 골대 중앙 y 좌표
+      reward -= Math.sqrt((more_state.bot_Team == 1 ? 320 : -320 - status[8]) ** 2 + status[9] ** 2)
 
-    // 1. 볼과의 거리 보상 (볼에 가까워질수록 보상, 지수적 감소)
-    const ballProximityReward = Math.exp(-ballDistance / 50) * 5;
-    reward += ballProximityReward;
+      reward += 0.1 * Math.sqrt((more_state.bot_Team == 1 ? 320 : -320 + status[8]) ** 2 + status[9] ** 2)
 
-    // 2. 볼에 가까워지는 것에 대한 보상 (거리 변화)
-    if (this.lastBallDistance !== Infinity) {
-      const distanceImprovement = this.lastBallDistance - ballDistance;
-      reward += distanceImprovement * 2;  // 가까워질수록 보상
-    }
-    this.lastBallDistance = ballDistance;
+      let distanza_alla_palla = Math.sqrt((status[8] - status[0]) ** 2 + (status[9] - status[1]) ** 2)
+      reward -= distanza_alla_palla / 2   
 
-    // 3. 볼 소유 보상 (볼과 매우 가까울 때)
-    const BALL_POSSESSION_DISTANCE = 22;  // 볼 소유로 간주하는 거리
-    if (ballDistance < BALL_POSSESSION_DISTANCE) {
-      reward += 10;  // 볼 소유 보상
-      
-      // 4. 볼을 골대 방향으로 차는 것에 대한 보상
-      const toGoalVector = {x: goalX - ballPos.x, y: goalY - ballPos.y};
-      const ballToGoalAlignment = this.vectorAlignment(
-        [toGoalVector.x, toGoalVector.y],
-        [ballVel.x, ballVel.y]
-      );
-      reward += ballToGoalAlignment * 15;  // 골대 방향으로 차면 보상
-      
-      // 5. 골대 근처에서의 보상 (골대 100 이내)
-      const goalDistance = Math.sqrt(
-        Math.pow(ballPos.x - goalX, 2) + Math.pow(ballPos.y - goalY, 2)
-      );
-      if (goalDistance < 100) {
-        reward += (100 - goalDistance) / 10;  // 골대에 가까울수록 보상
+
+      function prodotto_scalare(a, b){
+          let lung_a = Math.max(1e-5, lung(a))
+          let lung_b = Math.max(1e-5, lung(b))
+          return (a[0] * b[0] + a[1] * b[1]) / lung_a / lung_b
       }
-    }
-
-    // 6. 볼 속도 보상 (볼을 빠르게 움직일 때, 특히 골대 방향으로)
-    const ballSpeed = Math.sqrt(ballVel.x ** 2 + ballVel.y ** 2);
-    if (ballSpeed > 0) {
-      const toGoalVector = {x: goalX - ballPos.x, y: goalY - ballPos.y};
-      const speedAlignment = this.vectorAlignment(
-        [toGoalVector.x, toGoalVector.y],
-        [ballVel.x, ballVel.y]
-      );
-      reward += ballSpeed * speedAlignment * 0.5;  // 골대 방향으로 빠르게 움직일 때 보상
-    }
-
-    // 7. 움직임 보상 (가만히 있지 않고 움직일 때)
-    const botSpeed = Math.sqrt(botVel.x ** 2 + botVel.y ** 2);
-    if (botSpeed > 0.1) {
-      reward += botSpeed * 0.1;  // 움직일 때 작은 보상
-    } else {
-      reward -= 0.5;  // 가만히 있으면 페널티
-    }
-
-    // 8. 상대방과의 거리 고려 (수비/공격 상황)
-    const opDistance = Math.sqrt(
-      Math.pow(botPos.x - opPos.x, 2) + Math.pow(botPos.y - opPos.y, 2)
-    );
-    
-    // 볼을 가지고 있을 때 상대방과의 거리
-    if (ballDistance < BALL_POSSESSION_DISTANCE) {
-      if (opDistance < 50) {
-        reward -= 5;  // 상대방이 가까이 있으면 페널티 (압박)
+      function lung(a){
+          return Math.sqrt(a[0] ** 2 + a[1] ** 2)
       }
-    } else {
-      // 볼을 가지고 있지 않을 때 상대방과 볼 사이에 위치
-      const ballToOpDistance = Math.sqrt(
-        Math.pow(opPos.x - ballPos.x, 2) + Math.pow(opPos.y - ballPos.y, 2)
-      );
-      if (ballToOpDistance < ballDistance) {
-        // 상대방이 볼에 더 가까우면 수비 보상
-        reward += 2;
+
+      let vett_palla_porta = [more_state.bot_Team == 1 ? 320 : -320 - status[8], status[9]]
+      reward += prodotto_scalare(vett_palla_porta, [status[10], status[11]])
+
+
+      if (!status[13]){
+          let velocita_palla = Math.sqrt(status[10] ** 2 + status[11] ** 2)
+          reward -= 2000 * Math.max(0.0, 0.1 - velocita_palla)
       }
-    }
 
-    // 9. 골 보상/페널티
-    if (moreState.score.ownTeam > this.own_score) {
-        reward += 1000;  // 골 성공 시 큰 보상
-        this.own_score = moreState.score.ownTeam;
-    }
-    if (moreState.score.opponentTeam > this.opponent_score) {
-        reward -= 500;  // 실점 시 큰 페널티
-        this.opponent_score = moreState.score.opponentTeam;
-    }
+      if ((more_state.bot_Team == 1) ? status[8] < status[0] : status[8] > status[0]) reward -= Math.abs(status[0] - status[8])
 
-    // 10. 게임 상태 페널티
-    if (!moreState.game_State) {
-        reward -= 0.5;  // 게임 시작 지연에 대한 페널티
-    }
 
-    // 11. 볼이 골대 근처로 이동할 때 보상
-    if (this.lastBallPosition.x !== 0 || this.lastBallPosition.y !== 0) {
-      const lastGoalDistance = Math.sqrt(
-        Math.pow(this.lastBallPosition.x - goalX, 2) + 
-        Math.pow(this.lastBallPosition.y - goalY, 2)
-      );
-      const currentGoalDistance = Math.sqrt(
-        Math.pow(ballPos.x - goalX, 2) + Math.pow(ballPos.y - goalY, 2)
-      );
-      if (currentGoalDistance < lastGoalDistance) {
-        reward += (lastGoalDistance - currentGoalDistance) * 0.1;  // 골대에 가까워질수록 보상
+      if (more_state.bot_Team == more_state.start_Team && !more_state.game_State){
+          reward -= 0.25 * this.not_started_yet
+          this.not_started_yet += 1
       }
-    }
-    this.lastBallPosition = {x: ballPos.x, y: ballPos.y};
+      else  this.not_started_yet = 0
 
-    return reward;
-  }
+      let goal_reward = 0
+      if(this.own_score!=more_state.score.ownTeam||this.opponent_score!=more_state.score.opponentTeam){
+          if (this.own_score!=more_state.score.ownTeam){
+              goal_reward = 50000
+              this.own_score=more_state.score.ownTeam
+          }
+          else if (this.opponent_score!=more_state.score.opponentTeam){
+              goal_reward = -5000
+              this.opponent_score=more_state.score.opponentTeam  
+          }
+      }
+      reward += goal_reward
 
-  vectorAlignment(vec1, vec2) {
-      const dotProduct = vec1[0] * vec2[0] + vec1[1] * vec2[1];
-      const mag1 = Math.sqrt(vec1[0]**2 + vec1[1]**2);
-      const mag2 = Math.sqrt(vec2[0]**2 + vec2[1]**2);
-      return dotProduct / (mag1 * mag2 + 1e-8);
+      return reward
   }
 }
   
