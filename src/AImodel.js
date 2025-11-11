@@ -9,56 +9,55 @@ class Model {
 
         if (hiddenLayerSizesOrModel instanceof tf.LayersModel) {
             this.network = hiddenLayerSizesOrModel;
-            this.network.summary();
-            this.network.compile({
-                optimizer: 'adam',
-                loss: [
-                    (yTrue, yPred) => tf.losses.softmaxCrossEntropy(yTrue, yPred),
-                    'meanSquaredError'
-                ]
-            });
+            this.compileNetwork();
         } else {
             this.defineModel(hiddenLayerSizesOrModel);
         }
+        this.network.summary();
     }
 
     defineModel(hiddenLayerSizes) {
-        if (!Array.isArray(hiddenLayerSizes)) {
-            hiddenLayerSizes = [hiddenLayerSizes];
+        const defaultHidden = [64, 64];
+        if (!Array.isArray(hiddenLayerSizes) || hiddenLayerSizes.length === 0) {
+            hiddenLayerSizes = defaultHidden;
         }
 
-        // Functional API를 사용하여 다중 출력 모델 생성
         const input = tf.input({ shape: [this.numStates] });
-        
-        // 공통 백본 레이어
-        let x = input;
-        hiddenLayerSizes.forEach((size,id) => {
-            x = tf.layers.dense({
+
+        // 공유 백본
+        let shared = input;
+        hiddenLayerSizes.forEach((size, id) => {
+            shared = tf.layers.dense({
                 units: size,
-                activation: (id == 2 || id == 3) ? 'relu' : 'tanh'
-            }).apply(x);
+                activation: (id == 2 || id == 3) ? 'relu' : 'tanh',
+                kernelInitializer: 'ones',
+                biasInitializer: 'ones'
+            }).apply(shared);
         });
 
-        // 정책 헤드 (행동 확률)
         const policyHead = tf.layers.dense({
             units: this.numActions,
             activation: 'linear',
-            name: 'policy'
-        }).apply(x);
+            name: 'policy',
+            kernelInitializer: 'ones',
+            biasInitializer: 'ones'
+        }).apply(shared);
 
-        // 가치 헤드 (상태 가치)
         const valueHead = tf.layers.dense({
             units: 1,
             activation: 'linear',
-            name: 'value'
-        }).apply(x);
+            name: 'value',
+            kernelInitializer: 'ones',
+            biasInitializer: 'ones'
+        }).apply(shared);
 
-        // 다중 출력 모델 생성
         this.network = tf.model({ inputs: input, outputs: [policyHead, valueHead] });
+        this.compileNetwork();
+    }
 
-        this.network.summary();
+    compileNetwork() {
         this.network.compile({
-            optimizer: 'adam',
+            optimizer: tf.train.adam(7e-4),
             loss: [
                 (yTrue, yPred) => tf.losses.softmaxCrossEntropy(yTrue, yPred),
                 'meanSquaredError'
@@ -68,11 +67,10 @@ class Model {
 
     predict(states) {
         return tf.tidy(() => {
-            const output = this.network.predict(states);
-            const policyLogits = output[0];
-            const stateValue = output[1];
+            const [policyLogits, stateValue] = this.network.predict(states);
             return [policyLogits, stateValue];
         });
     }
 }
+
 module.exports = { Model };

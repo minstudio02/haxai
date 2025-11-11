@@ -1383,6 +1383,9 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
     data.tick = tickNumber;
     data.scores = room.getScores();
     data.gameEnded = gameEnded;
+    if(game_started == false && data.ball.x !== 0){
+        game_started = true
+    }
     data.started = game_started
     data.init_team = start_team
     window.messageToServer("onGameTick", data);
@@ -1422,11 +1425,7 @@ async function createHaxballRoom(serverName, password, recaptchaToken, adminToke
   room.onTeamGoal = function(team) {
     start_team = team == 1 ? 2 : 1
   }
-  room.onPlayerBallKick = function(player) {
-    if(game_started==false){
-        game_started=true
-    }
-  }
+
   room.onGameStart = function(byPlayer) {
     tickNumber = 0;
     var dateNow = Date.now();
