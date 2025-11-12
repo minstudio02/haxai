@@ -31,8 +31,8 @@ function normL2(vec) {
 }
 
 function angle(vec1, vec2 = {x: 1, y: 0})  {
-    var rad = Math.atan2(vec2.y,vec2.x) - Math.atan2(vec1.y,vec1.x);
-    var deg = rad*(180/Math.PI);
+    let rad = Math.atan2(vec2.y,vec2.x) - Math.atan2(vec1.y,vec1.x);
+    let deg = rad*(180/Math.PI);
     return deg;
 }
 
@@ -48,7 +48,7 @@ function transformVectors(object, operation) {
       return operation(object);
     }
     else {
-      var newObject = {};
+      let newObject = {};
       Object.keys(object).forEach((key) => {
         newObject[key] = transformVectors(object[key], operation);
       });

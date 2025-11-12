@@ -1,5 +1,6 @@
 const decache = require('decache');
 const conf = require('./config.js');
+let vec = require('./vectors.js');
 
 const keyHold = {};
 
@@ -107,17 +108,17 @@ async function resetAllKeysExceptFor(page, ...exceptions) {
 }
 
 function getBotRelativeGameEnv(dataHistory, bot) {
-  var lastTickNumber = Math.max(...Object.keys(dataHistory));
-  var currentData = dataHistory[lastTickNumber];
-  var lastData = dataHistory[lastTickNumber - 1];
-  var localPlayer = Object.values(currentData.players).find((player) => player.id == bot.roomId);
+  let lastTickNumber = Math.max(...Object.keys(dataHistory));
+  let currentData = dataHistory[lastTickNumber];
+  let lastData = dataHistory[lastTickNumber - 1];
+  let localPlayer = Object.values(currentData.players).find((player) => player.id == bot.roomId);
   if(!localPlayer || !localPlayer.position) {
     return null;
   }
 
-  var botVelocity = localPlayer.velocity;
+  let botVelocity = localPlayer.velocity;
 
-  var ballVelocity;
+  let ballVelocity;
   if(lastData) {
     ballVelocity = { x: currentData.ball.xspeed , y: currentData.ball.yspeed };
   }
@@ -125,7 +126,7 @@ function getBotRelativeGameEnv(dataHistory, bot) {
     ballVelocity = { x: 0, y: 0 };
   }
 
-  var relativeEnv = {
+  let relativeEnv = {
     tick: currentData.tick,
     bot: {
       id: localPlayer.id,
@@ -161,9 +162,9 @@ function getBotRelativeGameEnv(dataHistory, bot) {
       return;
     }
 
-    var playerVelocity = player.velocity;
+    let playerVelocity = player.velocity;
 
-    var relativePlayerInfo = {
+    let relativePlayerInfo = {
       id: player.id,
       position: player.position,
       velocity: playerVelocity
@@ -171,6 +172,13 @@ function getBotRelativeGameEnv(dataHistory, bot) {
 
     (player.team == localPlayer.team ? relativeEnv.teammates : relativeEnv.opponents).push(relativePlayerInfo);
   });
+
+  if(localPlayer.team == conf.BLUE_TEAM) {
+    relativeEnv = vec.transformVectors(relativeEnv, (vector) => ({
+      x: vector.x * -1,
+      y: vector.y * -1
+    }));
+  }
 
   return relativeEnv;
 }

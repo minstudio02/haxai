@@ -24,32 +24,52 @@ class Model {
 
         const input = tf.input({ shape: [this.numStates] });
 
+        // Stable-Baselines MlpPolicy 스타일과 동일한 정규 직교 초기화 적용
+        const hiddenInitializer = tf.initializers.orthogonal({ gain: Math.sqrt(2) });
+        const policyHeadInitializer = tf.initializers.orthogonal({ gain: 0.01 });
+        const valueHeadInitializer = tf.initializers.orthogonal({ gain: 1.0 });
+
         // 공유 백본
         let shared = input;
-        hiddenLayerSizes.forEach((size, id) => {
+        hiddenLayerSizes.forEach((size) => {
             shared = tf.layers.dense({
                 units: size,
-                activation: (id == 2 || id == 3) ? 'relu' : 'tanh',
-                kernelInitializer: 'ones',
-                biasInitializer: 'ones'
+                activation: 'tanh',
+                kernelInitializer: hiddenInitializer,
+                biasInitializer: 'zeros'
             }).apply(shared);
         });
+
+        // 정책 / 가치 독립 헤드
+        const policyBranch = tf.layers.dense({
+            units: hiddenLayerSizes[hiddenLayerSizes.length - 1],
+            activation: 'tanh',
+            kernelInitializer: hiddenInitializer,
+            biasInitializer: 'zeros'
+        }).apply(shared);
+
+        const valueBranch = tf.layers.dense({
+            units: hiddenLayerSizes[hiddenLayerSizes.length - 1],
+            activation: 'tanh',
+            kernelInitializer: hiddenInitializer,
+            biasInitializer: 'zeros'
+        }).apply(shared);
 
         const policyHead = tf.layers.dense({
             units: this.numActions,
             activation: 'linear',
             name: 'policy',
-            kernelInitializer: 'ones',
-            biasInitializer: 'ones'
-        }).apply(shared);
+            kernelInitializer: policyHeadInitializer,
+            biasInitializer: 'zeros'
+        }).apply(policyBranch);
 
         const valueHead = tf.layers.dense({
             units: 1,
             activation: 'linear',
             name: 'value',
-            kernelInitializer: 'ones',
-            biasInitializer: 'ones'
-        }).apply(shared);
+            kernelInitializer: valueHeadInitializer,
+            biasInitializer: 'zeros'
+        }).apply(valueBranch);
 
         this.network = tf.model({ inputs: input, outputs: [policyHead, valueHead] });
         this.compileNetwork();
@@ -57,7 +77,7 @@ class Model {
 
     compileNetwork() {
         this.network.compile({
-            optimizer: tf.train.adam(7e-4),
+            optimizer: tf.train.adam(),
             loss: [
                 (yTrue, yPred) => tf.losses.softmaxCrossEntropy(yTrue, yPred),
                 'meanSquaredError'

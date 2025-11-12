@@ -20,9 +20,9 @@ function checkAIActionFile(fileName) {
   return relativeFileName;
 }
 
-var counterBots = 0;
+let counterBots = 0;
 function createBot(server) {
-  var botId = ++counterBots;
+  let botId = ++counterBots;
   const child = fork("./src/bot.js", [botId, server.roomLink, server.admin, server.password]);
   server.bots[botId] = child;
   if(server.verbose) {

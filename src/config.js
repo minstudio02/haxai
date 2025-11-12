@@ -1,4 +1,4 @@
-var crypto = require("crypto");
+let crypto = require("crypto");
 
 const DEFAULT_PASSWORD = "";
 const DEFAULT_AI_FILE = "agents/simple_ai"

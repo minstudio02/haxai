@@ -29,7 +29,7 @@ const waitForHaxballApiInit = async (page, maxWaitTime = 10 * 1000) => {
 async function launchServer(args) {
     Object.assign(server, args);
 
-    var browserParams = { dumpio: server.verbose };
+    let browserParams = { dumpio: server.verbose };
     if(server.vps) {
       browserParams.args = ["--disable-features=WebRtcHideLocalIpsWithMdns"];
     }
@@ -46,8 +46,8 @@ async function launchServer(args) {
     await page.waitForFunction('window.HBInit');
     await page.waitForSelector('iframe');
 
-    var frames = await page.frames();
-    var gameFrame = frames.find(f => f.url().indexOf("__cache_static__/g/headless.html") > -1);
+    let frames = await page.frames();
+    let gameFrame = frames.find(f => f.url().indexOf("__cache_static__/g/headless.html") > -1);
 
     await page.exposeFunction("messageToServer", onRoomMessage);
 
@@ -84,7 +84,7 @@ async function launchServer(args) {
       createBot(server);
     }
 
-    var actionFileSettingOperation = () => sendMessageToAllBots(server.bots, "onActionFileRefresh", { actionFile: server.redteam });
+    let actionFileSettingOperation = () => sendMessageToAllBots(server.bots, "onActionFileRefresh", { actionFile: server.redteam });
     if(server.nocache) {
       setInterval(actionFileSettingOperation, 1500);
     }

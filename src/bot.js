@@ -31,7 +31,7 @@ async function getPolicy(){
     policyNet = await SaveablePolicyNetwork.loadModel();
   }else{
     const hiddenLayerSizes =
-    '64,256,128,64,32'.trim().split(',').map(v => {
+    '128,128,128,128'.trim().split(',').map(v => {
       const num = Number.parseInt(v.trim());
       if (!(num > 0)) {
         throw new Error(
@@ -58,8 +58,8 @@ async function run () {
     await page.goto(roomLink);
     await page.waitForSelector("iframe");
 
-    var frames = page.frames();
-    var myframe = frames.find(f => f.url().indexOf("__cache_static__/g/game.html") > -1);
+    let frames = page.frames();
+    let myframe = frames.find(f => f.url().indexOf("__cache_static__/g/game.html") > -1);
 
     const inputName = await myframe.$("input[type=text]");
     await inputName.type(bot.name);

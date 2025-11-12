@@ -4,8 +4,8 @@ const tf = require('@tensorflow/tfjs-node');
 
 
 
-var dataHistory = {};
-var delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
+let dataHistory = {};
+let delayBeforePlay = conf.MAX_DELAY_BEFORE_PLAY;
 
 async function onBotAuthentification(data, bot, page) {
   bot.roomId = data.roomId;
@@ -27,13 +27,13 @@ async function onGameTick(data, bot, page) {
     Object.keys(dataHistory).filter(tick => tick < data.tick - 2).forEach(tick => delete dataHistory[tick]);
   }
 
-  var environment = getBotRelativeGameEnv(dataHistory, bot);
+  let environment = getBotRelativeGameEnv(dataHistory, bot);
   if(!environment) {
     return; // the bot is not in the game
   }
 
-  var lastData = dataHistory[data.tick - 1];
-  var goalJustScored = lastData.scores.red != data.scores.red || lastData.scores.blue != data.scores.blue;
+  let lastData = dataHistory[data.tick - 1];
+  let goalJustScored = lastData.scores.red != data.scores.red || lastData.scores.blue != data.scores.blue;
 
   if(delayBeforePlay > 0) {
     await resetAllKeysExceptFor(page);
@@ -58,7 +58,7 @@ async function onGameTick(data, bot, page) {
 
   bot.policy.haxai.setGameState(environment)
 
-  if(environment.bot.team != 0 && environment.tick % 3 == 0){
+  if(environment.bot.team != 0 && environment.tick % 10 == 0){
     if(conf.IS_TRAINING) await bot.policy.train(page);
     else await bot.policy.orchestrator.test(page);
   }

@@ -17,18 +17,19 @@ class Orchestrator {
       this.discountRate = discountRate;
 
       this.not_started_yet = 0
-      this.own_score=0
-      this.opponent_score=0
+      this.own_score = 0
+      this.opponent_score = 0
       this.lastBallDistance = Infinity;  // 이전 프레임의 볼 거리
       this.lastBallPosition = {x: 0, y: 0};  // 이전 프레임의 볼 위치
 
       // PPO2 하이퍼파라미터 (vani-or/haxball-ai 참고)
-      this.clipEpsilon = 0.1;        // 초기 정책 클리핑 범위
-      this.valueClipEpsilon = 0.2;   // 가치 클리핑 범위
+      this.clipEpsilon = 0.2;        // 정책 클리핑 범위
+      this.valueClipEpsilon = 0.2;   // 가치 함수 클리핑 범위
       this.ppoEpochs = 4;            // PPO 업데이트 에포크 수
+      this.miniBatchSplits = 4;      // 한 에포크당 미니배치 개수
       this.valueCoeff = 0.5;         // 가치 손실 계수
       this.entropyCoeff = 0.01;      // 엔트로피 정규화 계수
-      this.learningRate = 7e-4;      // 초기 학습률
+      this.learningRate = 3e-4;      // 초기 학습률 (baselines PPO2 기본값)
       this.gaeLambda = 0.95;         // GAE lambda 파라미터
       this.maxGradNorm = 0.5;        // 그래디언트 클리핑
       this.adamBeta1 = 0.99;
@@ -37,7 +38,7 @@ class Orchestrator {
       this.epsilon = 1e-8;
 
       // 스케줄링 파라미터 (LinearSchedule 유사)
-      this.totalScheduleUpdates = 5000;
+      this.totalScheduleUpdates = 25000;
       this.initialLearningRate = this.learningRate;
       this.minLearningRate = 1e-5;
       this.initialClipEpsilon = this.clipEpsilon;
@@ -92,7 +93,7 @@ class Orchestrator {
       const [action, actionLogProb, value] = this.getActionAndValue(stateTensor);
       
       await this.haxai.update(action, page);
-      await this.sleep(2000/60);
+      await this.sleep(10000/60);
 
       const nextState = this.haxai.getStateTensor();
       const reward = this.computeReward(nextState.arraySync()[0], this.haxai.getState());
@@ -157,13 +158,16 @@ class Orchestrator {
   }
 
   ppoUpdate() {
-    const batch = this.memory.samples.slice(-this.model.batchSize);
-    if (!batch || batch.length === 0) {
-      console.warn('Empty batch in ppoUpdate, skipping');
+    const batch = this.memory.sample(this.model.batchSize);
+    if (!batch || batch.length < this.model.batchSize) {
+      console.warn('Not enough samples for PPO update, skipping');
       return;
     }
 
-    // 입력 데이터 검증 및 정규화
+    const batchSize = batch.length;
+    const miniBatchSize = Math.max(1, Math.floor(batchSize / this.miniBatchSplits));
+
+    // 입력 텐서 구성
     const states = tf.concat(batch.map(([state]) => state));
     const actions = tf.tensor1d(batch.map(([, action]) => action), 'int32');
     const nextStates = tf.concat(batch.map(([,,, nextState]) => nextState));
@@ -176,12 +180,12 @@ class Orchestrator {
     const [nextPolicyLogits, nextValues] = this.model.predict(nextStates);
     nextPolicyLogits.dispose();
     const nextValuesFlat = tf.squeeze(nextValues);
-    const nextValuesArr = nextValuesFlat.dataSync();
+    const nextValuesArr = nextValuesFlat.arraySync();
 
-    const advantagesArr = new Array(batch.length);
-    const returnsArr = new Array(batch.length);
+    const advantagesArr = new Array(batchSize);
+    const returnsArr = new Array(batchSize);
     let gae = 0;
-    for (let t = batch.length - 1; t >= 0; t--) {
+    for (let t = batchSize - 1; t >= 0; t--) {
       const mask = notDoneMask[t];
       const delta = rewardsArr[t] + this.discountRate * nextValuesArr[t] * mask - oldValuesArr[t];
       gae = delta + this.discountRate * this.gaeLambda * mask * gae;
@@ -190,100 +194,128 @@ class Orchestrator {
     }
 
     const epsilonScalar = tf.scalar(this.epsilon);
-    const returnsTensor = tf.tensor1d(returnsArr);
-    const returnsClipped = tf.clipByValue(returnsTensor, -50, 50);
     const advantagesTensor = tf.tensor1d(advantagesArr);
+    const returnsTensor = tf.tensor1d(returnsArr);
     const advMean = advantagesTensor.mean();
-    const advStd = tf.sqrt(advantagesTensor.sub(advMean).square().mean().add(epsilonScalar));
+    const advStd = tf.sqrt(
+      advantagesTensor.sub(advMean).square().mean().add(epsilonScalar)
+    );
     const normalizedAdvantages = advantagesTensor.sub(advMean).div(advStd.add(epsilonScalar));
+    const returnsClipped = tf.clipByValue(returnsTensor, -200, 200);
+    const oldValues = tf.tensor1d(oldValuesArr);
+
     advMean.dispose();
     advStd.dispose();
     advantagesTensor.dispose();
     returnsTensor.dispose();
-    const oldValues = tf.tensor1d(oldValuesArr);
+
+    let epochLossAccumulator = 0;
+    let epochBatchCounter = 0;
 
     for (let epoch = 0; epoch < this.ppoEpochs; epoch++) {
-      // variableGrads를 사용하기 위해 함수 내에서 loss를 계산
-      const {value: lossValue, grads} = tf.variableGrads(() => tf.tidy(() => {
-        const [newPolicyLogits, newValues] = this.model.predict(states);
-        const newActionProbs = tf.softmax(newPolicyLogits);
-        newPolicyLogits.dispose();
+      const shuffledIndices = tf.util.createShuffledIndices(batchSize);
 
-        const actionMask = tf.oneHot(actions, this.model.numActions);
-        const logProbs = tf.log(newActionProbs.add(this.epsilon));
-        const selectedLogProbs = tf.sum(tf.mul(logProbs, actionMask), 1);
-        const newValuesFlat = tf.squeeze(newValues);
+      for (let start = 0; start < batchSize; start += miniBatchSize) {
+        const end = Math.min(start + miniBatchSize, batchSize);
+        const idxArray = Array.from(shuffledIndices.slice(start, end));
+        const idxTensor = tf.tensor1d(idxArray, 'int32');
 
-        const ratio = tf.exp(tf.sub(selectedLogProbs, oldLogProbs));
+        const statesMB = tf.gather(states, idxTensor);
+        const actionsMB = tf.gather(actions, idxTensor);
+        const oldLogProbsMB = tf.gather(oldLogProbs, idxTensor);
+        const returnsMB = tf.gather(returnsClipped, idxTensor);
+        const advMB = tf.gather(normalizedAdvantages, idxTensor);
+        const oldValuesMB = tf.gather(oldValues, idxTensor);
 
-        const surr1 = tf.mul(ratio, normalizedAdvantages);
-        const surr2 = tf.mul(
-          tf.clipByValue(ratio, 1 - this.clipEpsilon, 1 + this.clipEpsilon),
-          normalizedAdvantages
-        );
+        const { value: lossValue, grads } = tf.variableGrads(() => tf.tidy(() => {
+          const [policyLogits, valuePred] = this.model.predict(statesMB);
+          const logProbsAll = tf.logSoftmax(policyLogits);
+          const actionMask = tf.oneHot(actionsMB, this.model.numActions);
+          const selectedLogProbs = tf.sum(logProbsAll.mul(actionMask), 1);
+          const ratio = tf.exp(selectedLogProbs.sub(oldLogProbsMB));
+          const clippedRatio = tf.clipByValue(
+            ratio,
+            1 - this.clipEpsilon,
+            1 + this.clipEpsilon
+          );
 
-        const actorLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2)));
+          const surrogate1 = ratio.mul(advMB);
+          const surrogate2 = clippedRatio.mul(advMB);
+          const actorLoss = tf.neg(tf.mean(tf.minimum(surrogate1, surrogate2)));
 
-        const valueDiff = tf.sub(newValuesFlat, oldValues);
-        const valueClipped = tf.add(
-          oldValues,
-          tf.clipByValue(valueDiff, -this.valueClipEpsilon, this.valueClipEpsilon)
-        );
+          const valueFlat = tf.squeeze(valuePred, [1]);
+          const valueClipped = oldValuesMB.add(
+            tf.clipByValue(valueFlat.sub(oldValuesMB), -this.valueClipEpsilon, this.valueClipEpsilon)
+          );
+          const valueError1 = valueFlat.sub(returnsMB).square();
+          const valueError2 = valueClipped.sub(returnsMB).square();
+          const criticLoss = tf.mean(tf.maximum(valueError1, valueError2)).mul(0.5);
 
-        const valueError1 = tf.square(tf.sub(newValuesFlat, returnsClipped));
-        const valueError2 = tf.square(tf.sub(valueClipped, returnsClipped));
-        const criticLoss = tf.mul(0.5, tf.mean(tf.maximum(valueError1, valueError2)));
+          const probs = tf.softmax(policyLogits);
+          const entropy = tf.mean(
+            tf.sum(probs.mul(logProbsAll), 1).neg()
+          );
 
-        const entropy = tf.neg(tf.sum(tf.mul(newActionProbs, tf.log(newActionProbs.add(this.epsilon))), 1));
-        const entropyLoss = tf.mean(entropy);
+          const totalLoss = actorLoss
+            .add(criticLoss.mul(this.valueCoeff))
+            .sub(entropy.mul(this.entropyCoeff));
 
-        const totalLoss = actorLoss
-          .add(tf.mul(this.valueCoeff, criticLoss))
-          .sub(tf.mul(this.entropyCoeff, entropyLoss));
+          return totalLoss;
+        }));
 
-        logProbs.dispose();
-        selectedLogProbs.dispose();
-        entropy.dispose();
-        entropyLoss.dispose();
-        actionMask.dispose();
+        // 글로벌 그래디언트 클리핑
+        const gradList = Object.values(grads);
+        const { globalNorm, clipCoef, maxGradNormScalar, oneScalar } = tf.tidy(() => {
+          if (gradList.length === 0) {
+            return {
+              globalNorm: tf.scalar(0),
+              clipCoef: tf.scalar(1),
+              maxGradNormScalar: tf.scalar(this.maxGradNorm),
+              oneScalar: tf.scalar(1)
+            };
+          }
+          const gradSquares = gradList.map(g => tf.sum(g.square()));
+          const globalNormInner = tf.sqrt(tf.addN(gradSquares).add(this.epsilon));
+          const one = tf.scalar(1);
+          const maxGrad = tf.scalar(this.maxGradNorm);
+          const clip = tf.minimum(one, maxGrad.div(globalNormInner));
+          return { globalNorm: globalNormInner, clipCoef: clip, maxGradNormScalar: maxGrad, oneScalar: one };
+        });
 
-        return totalLoss;
-      }));
+        Object.keys(grads).forEach((key) => {
+          const clipped = grads[key].mul(clipCoef);
+          grads[key].dispose();
+          grads[key] = clipped;
+        });
 
-      // Global gradient norm clipping
-      const gradList = Object.values(grads);
-      const { globalNorm, clipCoef, oneScalar, maxGradNormScalar } = tf.tidy(() => {
-        const gradSquares = gradList.map(g => tf.sum(tf.square(g)));
-        const globalNormInner = tf.sqrt(tf.addN(gradSquares));
-        const one = tf.scalar(1);
-        const maxGrad = tf.scalar(this.maxGradNorm);
-        const clip = tf.minimum(
-          one,
-          maxGrad.div(globalNormInner.add(epsilonScalar))
-        );
-        return { globalNorm: globalNormInner, clipCoef: clip, oneScalar: one, maxGradNormScalar: maxGrad };
-      });
-      Object.keys(grads).forEach((key) => {
-        const clipped = grads[key].mul(clipCoef);
-        grads[key].dispose();
-        grads[key] = clipped;
-      });
+        this.optimizer.applyGradients(grads);
 
-      this.optimizer.applyGradients(grads);
-      
-      const lossScalar = lossValue.dataSync()[0];
-      console.log(`[PPO 학습] 에포크 ${epoch + 1}/${this.ppoEpochs} - 손실: ${lossScalar.toFixed(4)}`);
-      
-      // 그래디언트 텐서 정리
-      Object.values(grads).forEach(grad => grad.dispose());
-      lossValue.dispose();
-      globalNorm.dispose();
-      clipCoef.dispose();
-      oneScalar.dispose();
-      maxGradNormScalar.dispose();
+        const lossScalar = lossValue.dataSync()[0];
+        epochLossAccumulator += lossScalar;
+        epochBatchCounter += 1;
+
+        Object.values(grads).forEach(grad => grad.dispose());
+        lossValue.dispose();
+        globalNorm.dispose();
+        clipCoef.dispose();
+        maxGradNormScalar.dispose();
+        oneScalar.dispose();
+
+        statesMB.dispose();
+        actionsMB.dispose();
+        oldLogProbsMB.dispose();
+        returnsMB.dispose();
+        advMB.dispose();
+        oldValuesMB.dispose();
+        idxTensor.dispose();
+      }
+
+      console.log(`[PPO 학습] 에포크 ${epoch + 1}/${this.ppoEpochs} - 평균 손실: ${(epochLossAccumulator / Math.max(epochBatchCounter, 1)).toFixed(4)}`);
+      epochLossAccumulator = 0;
+      epochBatchCounter = 0;
     }
 
-    // 텐서 정리 (PPO2 업데이트 완료 후)
+    // 텐서 정리
     states.dispose();
     actions.dispose();
     nextStates.dispose();
@@ -308,14 +340,14 @@ class Orchestrator {
     computeReward(status,more_state) {
       let reward = 0
 /*
-      reward -= Math.sqrt((more_state.bot_Team == 1 ? 320 : -320 - status[8]) ** 2 + status[9] ** 2)
+      reward -= Math.sqrt((320 - status[8]) ** 2 + status[9] ** 2)
 
-      reward += 0.1 * Math.sqrt((more_state.bot_Team == 1 ? 320 : -320 + status[8]) ** 2 + status[9] ** 2)
+      reward += 0.1 * Math.sqrt((320 + status[8]) ** 2 + status[9] ** 2)
 */
       let distanza_alla_palla = Math.sqrt((status[8] - status[0]) ** 2 + (status[9] - status[1]) ** 2)
       reward -= distanza_alla_palla / 2   
 
-/*
+
       function prodotto_scalare(a, b){
           let lung_a = Math.max(1e-5, lung(a))
           let lung_b = Math.max(1e-5, lung(b))
@@ -325,7 +357,7 @@ class Orchestrator {
           return Math.sqrt(a[0] ** 2 + a[1] ** 2)
       }
 
-      let vett_palla_porta = [more_state.bot_Team == 1 ? 320 : -320 - status[8], -status[9]]
+      let vett_palla_porta = [320 - status[8], -status[9]]
       reward += prodotto_scalare(vett_palla_porta, [status[10], status[11]])
 
 
@@ -334,7 +366,7 @@ class Orchestrator {
           reward -= 100 * Math.max(0.0, 0.5 - velocita_palla)
       }
 
-      if ((more_state.bot_Team == 1) ? status[8] < status[0] : status[8] > status[0]) reward -= Math.abs(status[0] - status[8])
+      if (status[8] < status[0]) reward -= Math.abs(status[0] - status[8])
 
 
       if (more_state.bot_Team == more_state.start_Team && !more_state.game_State){
@@ -355,7 +387,7 @@ class Orchestrator {
           this.opponent_score = more_state.score.opponentTeam  
       }
 
-      reward += goal_reward */
+      reward += goal_reward
 
       return reward
   }
