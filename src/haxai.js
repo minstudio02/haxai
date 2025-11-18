@@ -1,5 +1,18 @@
 const tf = require('@tensorflow/tfjs-node');
 const { applyAction } = require('./bot_functions.js')
+
+const ACTION_MAP = [
+  'kick',
+  'forward',
+  'forward-left',
+  'left',
+  'backward-left',
+  'backward',
+  'backward-right',
+  'right',
+  'forward-right',
+  'none'
+];
 /**
  * Mountain car system simulator.
  *
@@ -96,16 +109,12 @@ class HaxAI {
    * @returns {bool} Whether the simulation is done.
    */
   async update(action,page) {
-    if (action==0 ) await applyAction(this.bot_Team, 'kick', page);
-    else if (action==1 ) await applyAction(this.bot_Team, 'forward', page);
-    else if (action==2 ) await applyAction(this.bot_Team, 'forward-left', page); 
-    else if (action==3 ) await applyAction(this.bot_Team, 'left', page); 
-    else if (action==4 ) await applyAction(this.bot_Team, 'backward-left', page); 
-    else if (action==5 ) await applyAction(this.bot_Team, 'backward', page); 
-    else if (action==6 ) await applyAction(this.bot_Team, 'backward-right', page); 
-    else if (action==7 ) await applyAction(this.bot_Team, 'right', page); 
-    else if (action==8 ) await applyAction(this.bot_Team, 'forward-right', page); 
-    else await applyAction(this.bot_Team, 'none', page); 
+    const resolvedIndex = Number.isInteger(action) ? action : ACTION_MAP.length - 1;
+    const boundedIndex = resolvedIndex >= 0 && resolvedIndex < ACTION_MAP.length
+      ? resolvedIndex
+      : ACTION_MAP.length - 1;
+    const command = ACTION_MAP[boundedIndex];
+    await applyAction(this.bot_Team, command, page);
 
   }
 

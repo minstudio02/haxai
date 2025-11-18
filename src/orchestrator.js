@@ -3,6 +3,66 @@ const {Model} = require('./AImodel');
 const {Memory} = require('./memory');
 const tf = require('@tensorflow/tfjs-node');
 
+const ACTION_INVERSION_TABLE = {
+  0: 0, // kick
+  1: 5, // forward <-> backward
+  2: 6, // forward-left <-> backward-right
+  3: 7, // left <-> right
+  4: 8, // backward-left <-> forward-right
+  5: 1,
+  6: 2,
+  7: 3,
+  8: 4,
+  9: 9 // none
+};
+
+const invertActionIndex = (action) => {
+  const mapped = ACTION_INVERSION_TABLE[action];
+  return mapped != null ? mapped : 9;
+};
+
+const invertStateVector = (state) => {
+  if (!Array.isArray(state)) {
+    return [];
+  }
+  const mirrored = state.slice();
+  if (mirrored.length < 14) {
+    return mirrored;
+  }
+
+  // swap bot/op coordinates along X axis, keep Y as-is for field symmetry
+  const botX = state[0];
+  const botY = state[1];
+  const botVx = state[2];
+  const botVy = state[3];
+  const opX = state[4];
+  const opY = state[5];
+  const opVx = state[6];
+  const opVy = state[7];
+  const ballX = state[8];
+  const ballY = state[9];
+  const ballVx = state[10];
+  const ballVy = state[11];
+
+  mirrored[0] = -opX;
+  mirrored[1] = opY;
+  mirrored[2] = -opVx;
+  mirrored[3] = opVy;
+
+  mirrored[4] = -botX;
+  mirrored[5] = botY;
+  mirrored[6] = -botVx;
+  mirrored[7] = botVy;
+
+  mirrored[8] = -ballX;
+  mirrored[9] = ballY;
+  mirrored[10] = -ballVx;
+  mirrored[11] = ballVy;
+
+  // Distance to ball and lock state remain identical after mirroring
+  return mirrored;
+};
+
 class Orchestrator {
   /**
    * @param {HaxAI} haxai
@@ -28,8 +88,8 @@ class Orchestrator {
       this.ppoEpochs = 4;            // PPO 업데이트 에포크 수
       this.miniBatchSplits = 4;      // 한 에포크당 미니배치 개수
       this.valueCoeff = 0.5;         // 가치 손실 계수
-      this.entropyCoeff = 0.01;      // 엔트로피 정규화 계수
-      this.learningRate = 3e-4;      // 초기 학습률 (baselines PPO2 기본값)
+      this.entropyCoeff = 0.05;      // 엔트로피 정규화 계수
+      this.learningRate = 3e-4 / 10;      // 초기 학습률 (baselines PPO2 기본값)
       this.gaeLambda = 0.95;         // GAE lambda 파라미터
       this.maxGradNorm = 0.5;        // 그래디언트 클리핑
       this.adamBeta1 = 0.99;
@@ -52,10 +112,31 @@ class Orchestrator {
         this.adamBeta2,
         this.adamEpsilon
       );
+
+      this.recurrentState = this.model.getInitialState(1);
+      this.evalRecurrentState = this.model.getInitialState(1);
+      this.lastTrainMask = 1;
+      this.lastEvalMask = 1;
   }
 
   sleep (time) {
     return new Promise((resolve) => setTimeout(resolve, time));
+  }
+
+  resetTrainRecurrentState() {
+    if (this.recurrentState) {
+      this.model.disposeState(this.recurrentState);
+    }
+    this.recurrentState = this.model.getInitialState(1);
+    this.lastTrainMask = 1;
+  }
+
+  resetEvalRecurrentState() {
+    if (this.evalRecurrentState) {
+      this.model.disposeState(this.evalRecurrentState);
+    }
+    this.evalRecurrentState = this.model.getInitialState(1);
+    this.lastEvalMask = 1;
   }
 
   // 학습률 스케줄링: LinearSchedule
@@ -90,124 +171,268 @@ class Orchestrator {
 
   async train(page) {
       const stateTensor = this.haxai.getStateTensor();
-      const [action, actionLogProb, value] = this.getActionAndValue(stateTensor);
-      
-      await this.haxai.update(action, page);
-      await this.sleep(10000/60);
+      const recurrentForStep = this.model.cloneState(this.recurrentState);
+      const maskValue = this.lastTrainMask;
+      const { action, negLogProb, value, nextState } = this.getActionAndValue(
+        stateTensor,
+        recurrentForStep,
+        maskValue
+      );
 
-      const nextState = this.haxai.getStateTensor();
-      const reward = this.computeReward(nextState.arraySync()[0], this.haxai.getState());
+      const prevStateArrays = this.model.stateToArray(recurrentForStep);
+      this.model.disposeState(recurrentForStep);
+
+      this.model.disposeState(this.recurrentState);
+      this.recurrentState = nextState;
+
+      await this.haxai.update(action, page);
+      await this.sleep(10000 / 60);
+
+      const nextStateTensor = this.haxai.getStateTensor();
+      const reward = this.computeReward(nextStateTensor.arraySync()[0], this.haxai.getState());
       const done = this.haxai.isDone();
 
-      this.memory.addSample([stateTensor, action, reward, nextState, actionLogProb, value, done]);
+      const nextStateClone = this.model.cloneState(this.recurrentState);
+      const nextStateArrays = this.model.stateToArray(nextStateClone);
+      this.model.disposeState(nextStateClone);
 
-      if (this.memory.samples.length % this.model.batchSize == 0) {
+      this.memory.addSample({
+        state: stateTensor,
+        action,
+        reward,
+        nextState: nextStateTensor,
+        negLogProb,
+        value,
+        done,
+        mask: maskValue,
+        prevRnnState: prevStateArrays,
+        nextRnnState: nextStateArrays
+      });
+
+      if (done) {
+        this.resetTrainRecurrentState();
+      }
+
+      this.lastTrainMask = done ? 0 : 1;
+
+      if (this.memory.samples.length % this.model.batchSize === 0) {
         this.ppoUpdate();
       }
   }
   
   async test(page){
-    const action = this.getActions(this.haxai.getStateTensor())[0];
-    await this.haxai.update(action,page);
+    const stateTensor = this.haxai.getStateTensor();
+    const evalStateClone = this.model.cloneState(this.evalRecurrentState);
+    const maskValue = this.lastEvalMask;
+    const { action, nextState } = this.getActionAndValue(stateTensor, evalStateClone, maskValue);
+
+    this.model.disposeState(evalStateClone);
+    this.model.disposeState(this.evalRecurrentState);
+    this.evalRecurrentState = nextState;
+
+    await this.haxai.update(action, page);
+    stateTensor.dispose();
+
+    const done = this.haxai.isDone();
+    if (done) {
+      this.resetEvalRecurrentState();
+    }
+    this.lastEvalMask = done ? 0 : 1;
   }
 
-  getActionAndValue(stateTensor) {
-    return tf.tidy(() => {
-      const [policyLogits, value] = this.model.predict(stateTensor);
-      const actionProbs = tf.softmax(policyLogits);
-      const sampled = tf.multinomial(policyLogits, 1);
-      const action = sampled.dataSync()[0];
-      const actionProb = Math.max(actionProbs.dataSync()[action], this.epsilon);
-      const actionLogProb = Math.log(actionProb);
-      const valueScalar = value.dataSync()[0];
-      sampled.dispose();
-      policyLogits.dispose();
-      actionProbs.dispose();
-      value.dispose();
-      return [action, actionLogProb, valueScalar];
-    });
-  }
-  /**
- * Get policy-network logits and the action based on state-tensor inputs.
- *
- * @param {tf.Tensor} inputs A tf.Tensor instance of shape `[batchSize, 4]`.
- * @returns {[tf.Tensor, tf.Tensor]}
- *   1. The logits tensor, of shape `[batchSize, 1]`.
- *   2. The actions tensor, of shape `[batchSize, 1]`.
- */
-  getLogitsAndActions(inputs) {
-    return tf.tidy(() => {
-      const [policyLogits, value] = this.model.predict(inputs);
-      if (value) value.dispose(); // 가치 출력은 사용하지 않으므로 dispose
-      const actionProbs = tf.softmax(policyLogits);
-      const actions = tf.multinomial(policyLogits, 1);
-      policyLogits.dispose();
-      return [actionProbs, actions];
-    });
-  }
+  getActionAndValue(stateTensor, recurrentState, maskValue = 1, deterministic = false) {
+    const { action, negLogProb, value, nextState } = this.model.step(
+      stateTensor,
+      recurrentState,
+      maskValue,
+      deterministic
+    );
 
-  /**
-   * Get actions based on a state-tensor input.
-   *
-   * @param {tf.Tensor} inputs A tf.Tensor instance of shape `[batchSize, 4]`.
-   * @param {Float32Array} inputs The actions for the inputs, with length
-   *   `batchSize`.
-   */
-  getActions(inputs) {
-    return this.getLogitsAndActions(inputs)[1].dataSync();
-  }
+    const asScalarOrArray = (val) => {
+      if (Array.isArray(val)) {
+        return val.length === 1 ? val[0] : val.slice();
+      }
+      return val;
+    };
 
+    const processedAction = asScalarOrArray(action);
+    const processedValue = asScalarOrArray(value);
+    const processedNegLogProb = asScalarOrArray(negLogProb);
+
+    return {
+      action: processedAction,
+      negLogProb: processedNegLogProb,
+      value: processedValue,
+      nextState
+    };
+  }
   ppoUpdate() {
-    const batch = this.memory.sample(this.model.batchSize);
-    if (!batch || batch.length < this.model.batchSize) {
-      console.warn('Not enough samples for PPO update, skipping');
+    const rawBatch = this.memory.samples.slice();
+    if (!rawBatch || rawBatch.length === 0) {
+      console.warn('No samples available for PPO update, skipping');
       return;
     }
 
-    const batchSize = batch.length;
-    const miniBatchSize = Math.max(1, Math.floor(batchSize / this.miniBatchSplits));
+    const validBatch = rawBatch.filter((sample, idx) => {
+      const issues = [];
+      if (!sample || typeof sample !== 'object') {
+        issues.push('sample is null');
+      } else {
+        const validateStateArray = (stateArray, label) => {
+          if (!Array.isArray(stateArray)) {
+            issues.push(`${label} missing`);
+            return;
+          }
+          if (stateArray.length !== this.model.numStates) {
+            issues.push(`${label} length invalid (${stateArray.length})`);
+            return;
+          }
+          for (let i = 0; i < stateArray.length; i++) {
+            if (!Number.isFinite(stateArray[i])) {
+              issues.push(`${label} contains non-finite value at ${i}`);
+              break;
+            }
+          }
+        };
 
-    // 입력 텐서 구성
-    const states = tf.concat(batch.map(([state]) => state));
-    const actions = tf.tensor1d(batch.map(([, action]) => action), 'int32');
-    const nextStates = tf.concat(batch.map(([,,, nextState]) => nextState));
-    const oldLogProbs = tf.tensor1d(batch.map(([,,,, logProb]) => logProb));
-    const oldValuesArr = batch.map(([,,,,, value]) => value);
-    const rewardsArr = batch.map(([,, reward]) => reward);
-    const notDoneMask = batch.map(([,,,,,, done]) => done ? 0 : 1);
+        validateStateArray(sample.state, 'state');
+        validateStateArray(sample.nextState, 'nextState');
 
-    // nextStates에 대한 가치 예측 (두 번째 출력이 value)
-    const [nextPolicyLogits, nextValues] = this.model.predict(nextStates);
-    nextPolicyLogits.dispose();
-    const nextValuesFlat = tf.squeeze(nextValues);
-    const nextValuesArr = nextValuesFlat.arraySync();
+        if (!Number.isFinite(sample.action)) {
+          issues.push(`action invalid (${sample.action})`);
+        }
+        if (!Number.isFinite(sample.negLogProb)) {
+          issues.push(`negLogProb invalid (${sample.negLogProb})`);
+        }
+        if (!Number.isFinite(sample.value)) {
+          issues.push(`value invalid (${sample.value})`);
+        }
+        if (
+          !sample.prevRnnState ||
+          !Array.isArray(sample.prevRnnState.h) ||
+          !Array.isArray(sample.prevRnnState.c) ||
+          sample.prevRnnState.h.length !== this.model.lstmUnits ||
+          sample.prevRnnState.c.length !== this.model.lstmUnits
+        ) {
+          issues.push('prevRnnState invalid');
+        }
+        if (
+          !sample.nextRnnState ||
+          !Array.isArray(sample.nextRnnState.h) ||
+          !Array.isArray(sample.nextRnnState.c) ||
+          sample.nextRnnState.h.length !== this.model.lstmUnits ||
+          sample.nextRnnState.c.length !== this.model.lstmUnits
+        ) {
+          issues.push('nextRnnState invalid');
+        }
+      }
+      if (issues.length > 0) {
+        console.warn(`[PPO] 샘플 무시 (index: ${idx}) - ${issues.join(', ')}`);
+        return false;
+      }
+      return true;
+    });
 
-    const advantagesArr = new Array(batchSize);
-    const returnsArr = new Array(batchSize);
-    let gae = 0;
-    for (let t = batchSize - 1; t >= 0; t--) {
-      const mask = notDoneMask[t];
-      const delta = rewardsArr[t] + this.discountRate * nextValuesArr[t] * mask - oldValuesArr[t];
-      gae = delta + this.discountRate * this.gaeLambda * mask * gae;
-      advantagesArr[t] = gae;
-      returnsArr[t] = gae + oldValuesArr[t];
+    if (validBatch.length < this.model.batchSize) {
+      console.warn(`[PPO] 유효 샘플 부족: ${validBatch.length}/${this.model.batchSize}`);
+      return;
     }
 
+    const baseBatch = validBatch.slice(-this.model.batchSize);
+    const baseBatchSize = baseBatch.length;
+    const numEnvs = Math.max(1, this.model.numEnvs || 1);
+
+    if (baseBatchSize % numEnvs !== 0) {
+      console.warn(`[PPO] 샘플 수가 환경 수의 배수가 아닙니다 (${baseBatchSize} vs numEnvs ${numEnvs})`);
+      return;
+    }
+
+    const stepsPerEnv = baseBatchSize / numEnvs;
+
+    const baseStates = baseBatch.map(sample => sample.state);
+    const baseNextStates = baseBatch.map(sample => sample.nextState);
+    const baseActions = baseBatch.map(sample => sample.action);
+    const baseNegLogProbs = baseBatch.map(sample => sample.negLogProb);
+    const baseValues = baseBatch.map(sample => sample.value);
+    const baseRewards = baseBatch.map(sample => sample.reward);
+    const baseMasks = baseBatch.map(sample => (sample.mask != null ? sample.mask : 1));
+    const baseNonTerminal = baseBatch.map(sample => (sample.done ? 0 : 1));
+    const basePrevRnnStates = baseBatch.map(sample => sample.prevRnnState);
+    const baseNextRnnStates = baseBatch.map(sample => sample.nextRnnState);
+
+    const nextStatesTensor = tf.tensor2d(baseNextStates, [baseBatchSize, this.model.numStates]);
+    const nextRecurrentBatch = this.model.batchStateArraysToTensors(baseNextRnnStates);
+    const [nextPolicyLogits, nextValuesTensor, nextHiddenH, nextHiddenC] = this.model.forward(
+      nextStatesTensor,
+      nextRecurrentBatch,
+      null
+    );
+    nextPolicyLogits.dispose();
+    nextHiddenH.dispose();
+    nextHiddenC.dispose();
+
+    const nextValuesFlat = tf.squeeze(nextValuesTensor);
+    const nextValuesArr = nextValuesFlat.arraySync();
+    nextValuesFlat.dispose();
+    nextValuesTensor.dispose();
+    nextStatesTensor.dispose();
+    nextRecurrentBatch.h.dispose();
+    nextRecurrentBatch.c.dispose();
+
+    const advantagesArr = new Array(baseBatchSize).fill(0);
+    const returnsArr = new Array(baseBatchSize).fill(0);
+
+    for (let envIdx = 0; envIdx < numEnvs; envIdx++) {
+      let gae = 0;
+      for (let step = stepsPerEnv - 1; step >= 0; step--) {
+        const flatIdx = step * numEnvs + envIdx;
+        const mask = baseNonTerminal[flatIdx];
+        const delta = baseRewards[flatIdx] + this.discountRate * nextValuesArr[flatIdx] * mask - baseValues[flatIdx];
+        gae = delta + this.discountRate * this.gaeLambda * mask * gae;
+        advantagesArr[flatIdx] = gae;
+        returnsArr[flatIdx] = gae + baseValues[flatIdx];
+      }
+    }
+
+    const mirroredStates = baseStates.map(invertStateVector);
+    const mirroredActions = baseActions.map(invertActionIndex);
+
+    const allStatesArray = baseStates.concat(mirroredStates);
+    const allActionsArray = baseActions.concat(mirroredActions);
+    const allNegLogProbsArray = baseNegLogProbs.concat(baseNegLogProbs);
+    const allValuesArray = baseValues.concat(baseValues);
+    const allAdvantagesArray = advantagesArr.concat(advantagesArr);
+    const allReturnsArray = returnsArr.concat(returnsArr);
+    const allMasksArray = baseMasks.concat(baseMasks);
+    const allPrevRnnStates = basePrevRnnStates.concat(basePrevRnnStates);
+
+    const batchSize = allStatesArray.length;
+    const miniBatchSize = Math.max(1, Math.floor(batchSize / this.miniBatchSplits));
+
+    const states = tf.tensor2d(allStatesArray, [batchSize, this.model.numStates]);
+    const actions = tf.tensor1d(allActionsArray, 'int32');
+    const oldNegLogProbsTensor = tf.tensor1d(allNegLogProbsArray);
+    const oldLogProbs = oldNegLogProbsTensor.neg();
+    const oldValues = tf.tensor1d(allValuesArray);
+    const masksTensor = tf.tensor1d(allMasksArray, 'float32');
+
+    const returnsTensorRaw = tf.tensor1d(allReturnsArray);
+    const returnsClipped = tf.clipByValue(returnsTensorRaw, -200, 200);
+
     const epsilonScalar = tf.scalar(this.epsilon);
-    const advantagesTensor = tf.tensor1d(advantagesArr);
-    const returnsTensor = tf.tensor1d(returnsArr);
+    const advantagesTensor = tf.tensor1d(allAdvantagesArray);
     const advMean = advantagesTensor.mean();
     const advStd = tf.sqrt(
       advantagesTensor.sub(advMean).square().mean().add(epsilonScalar)
     );
     const normalizedAdvantages = advantagesTensor.sub(advMean).div(advStd.add(epsilonScalar));
-    const returnsClipped = tf.clipByValue(returnsTensor, -200, 200);
-    const oldValues = tf.tensor1d(oldValuesArr);
 
+    returnsTensorRaw.dispose();
     advMean.dispose();
     advStd.dispose();
     advantagesTensor.dispose();
-    returnsTensor.dispose();
+
+    const prevRecurrentBatch = this.model.batchStateArraysToTensors(allPrevRnnStates);
 
     let epochLossAccumulator = 0;
     let epochBatchCounter = 0;
@@ -226,9 +451,17 @@ class Orchestrator {
         const returnsMB = tf.gather(returnsClipped, idxTensor);
         const advMB = tf.gather(normalizedAdvantages, idxTensor);
         const oldValuesMB = tf.gather(oldValues, idxTensor);
+        const prevHMB = tf.gather(prevRecurrentBatch.h, idxTensor);
+        const prevCMB = tf.gather(prevRecurrentBatch.c, idxTensor);
+        const maskMB = tf.gather(masksTensor, idxTensor);
 
         const { value: lossValue, grads } = tf.variableGrads(() => tf.tidy(() => {
-          const [policyLogits, valuePred] = this.model.predict(statesMB);
+          const [policyLogits, valuePred, nextHMB, nextCMB] = this.model.forward(
+            statesMB,
+            { h: prevHMB, c: prevCMB },
+            maskMB,
+            true
+          );
           const logProbsAll = tf.logSoftmax(policyLogits);
           const actionMask = tf.oneHot(actionsMB, this.model.numActions);
           const selectedLogProbs = tf.sum(logProbsAll.mul(actionMask), 1);
@@ -256,14 +489,14 @@ class Orchestrator {
             tf.sum(probs.mul(logProbsAll), 1).neg()
           );
 
-          const totalLoss = actorLoss
+          nextHMB.dispose();
+          nextCMB.dispose();
+
+          return actorLoss
             .add(criticLoss.mul(this.valueCoeff))
             .sub(entropy.mul(this.entropyCoeff));
-
-          return totalLoss;
         }));
 
-        // 글로벌 그래디언트 클리핑
         const gradList = Object.values(grads);
         const { globalNorm, clipCoef, maxGradNormScalar, oneScalar } = tf.tidy(() => {
           if (gradList.length === 0) {
@@ -307,6 +540,9 @@ class Orchestrator {
         returnsMB.dispose();
         advMB.dispose();
         oldValuesMB.dispose();
+        prevHMB.dispose();
+        prevCMB.dispose();
+        maskMB.dispose();
         idxTensor.dispose();
       }
 
@@ -315,23 +551,18 @@ class Orchestrator {
       epochBatchCounter = 0;
     }
 
-    // 텐서 정리
     states.dispose();
     actions.dispose();
-    nextStates.dispose();
     oldLogProbs.dispose();
+    oldNegLogProbsTensor.dispose();
     oldValues.dispose();
     returnsClipped.dispose();
     normalizedAdvantages.dispose();
     epsilonScalar.dispose();
-    nextValuesFlat.dispose();
-    nextValues.dispose();
-    batch.forEach(([state,,, nextState]) => {
-      state.dispose();
-      nextState.dispose();
-    });
+    prevRecurrentBatch.h.dispose();
+    prevRecurrentBatch.c.dispose();
+    masksTensor.dispose();
 
-    // 학습률 및 클리핑 스케줄 업데이트
     this.updateLearningRate();
 
     this.memory.clear();
@@ -339,11 +570,11 @@ class Orchestrator {
 
     computeReward(status,more_state) {
       let reward = 0
-/*
+
       reward -= Math.sqrt((320 - status[8]) ** 2 + status[9] ** 2)
 
       reward += 0.1 * Math.sqrt((320 + status[8]) ** 2 + status[9] ** 2)
-*/
+
       let distanza_alla_palla = Math.sqrt((status[8] - status[0]) ** 2 + (status[9] - status[1]) ** 2)
       reward -= distanza_alla_palla / 2   
 

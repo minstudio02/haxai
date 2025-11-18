@@ -64,8 +64,47 @@ class PolicyNetwork {
    */
   constructor(hiddenLayerSizesOrModel) {
     this.haxai = new HaxAI()
-    this.memory = new Memory(4096);
-    this.model = new Model(hiddenLayerSizesOrModel, 14, 10, 512)
+    this.memory = new Memory(10000);
+    const shouldWrapConfig = !(
+      hiddenLayerSizesOrModel instanceof tf.LayersModel ||
+      (
+        hiddenLayerSizesOrModel &&
+        typeof hiddenLayerSizesOrModel === 'object' &&
+        (hiddenLayerSizesOrModel.hiddenLayerSizes || hiddenLayerSizesOrModel.hiddenLayers)
+      )
+    );
+    const baselineDefaults = {
+      hiddenLayerSizes: [128, 128, 128, 128],
+      lstmUnits: 512,
+      numEnvs: 1,
+      policyHiddenSizes: [128, 128, 128, 128],
+      valueHiddenSizes: [128, 128, 128, 128]
+    };
+
+    const modelConfig = shouldWrapConfig
+      ? {
+          ...baselineDefaults,
+          hiddenLayerSizes: hiddenLayerSizesOrModel || baselineDefaults.hiddenLayerSizes
+        }
+      : {
+          ...baselineDefaults,
+          ...hiddenLayerSizesOrModel
+        };
+
+    const batchSize = modelConfig.batchSize || 128;
+
+    this.model = new Model(
+      modelConfig,
+      14,
+      10,
+      batchSize,
+      {
+        defaultHidden: baselineDefaults.hiddenLayerSizes,
+        policyHiddenSizes: baselineDefaults.policyHiddenSizes,
+        valueHiddenSizes: baselineDefaults.valueHiddenSizes,
+        lstmUnits: baselineDefaults.lstmUnits
+      }
+    )
     this.orchestrator= new Orchestrator(
       this.haxai,
       this.model,
